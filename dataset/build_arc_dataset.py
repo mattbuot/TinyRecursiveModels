@@ -8,6 +8,9 @@ import numpy as np
 from argdantic import ArgParser
 from pydantic import BaseModel
 
+import sys
+sys.path.append('/home/ubuntu/trm/TinyRecursiveModels/')
+
 from dataset.common import PuzzleDatasetMetadata, dihedral_transform, inverse_dihedral_transform
 
 

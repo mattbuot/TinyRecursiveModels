@@ -6,9 +6,99 @@ import torch
 import numpy as np
 from numba import njit
 import torch.distributed as dist
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from PIL import Image
+import io
+import wandb
 
 from dataset.build_arc_dataset import inverse_aug, grid_hash, arc_grid_to_np
 from dataset.common import PuzzleDatasetMetadata
+
+# Standard ARC color palette (RGB values for digits 0-9)
+ARC_COLORS = {
+    0: (0, 0, 0),        # Black
+    1: (0, 0, 255),      # Blue
+    2: (255, 0, 0),      # Red
+    3: (0, 255, 0),      # Green
+    4: (255, 255, 0),    # Yellow
+    5: (128, 128, 128),  # Gray
+    6: (255, 0, 255),    # Magenta
+    7: (255, 165, 0),    # Orange
+    8: (173, 216, 230),  # Light Blue
+    9: (165, 42, 42)     # Brown
+}
+
+def create_arc_colormap():
+    """Create a matplotlib colormap for ARC grids."""
+    colors = [ARC_COLORS[i] for i in range(10)]
+    colors = [(r/255, g/255, b/255) for r, g, b in colors]  # Normalize to [0,1]
+    return mcolors.ListedColormap(colors)
+
+def visualize_arc_grid(grid: np.ndarray, title: str = ""):
+    """Visualize a single ARC grid with proper colors."""
+    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+    cmap = create_arc_colormap()
+    
+    # Convert to int32 to allow negative values for empty cells
+    grid_plot = grid.astype(np.int32)
+    # Use -1 for empty cells (value 0)
+    grid_plot[grid == 0] = -1
+    
+    im = ax.imshow(grid_plot, cmap=cmap, vmin=-1, vmax=9)
+    ax.set_title(title, fontsize=10)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    
+    # Add grid lines
+    for i in range(grid.shape[0] + 1):
+        ax.axhline(i - 0.5, color='black', linewidth=0.5)
+    for j in range(grid.shape[1] + 1):
+        ax.axvline(j - 0.5, color='black', linewidth=0.5)
+    
+    plt.tight_layout()
+    return fig
+
+def create_composite_visualization(input_grid: np.ndarray, expected_grid: np.ndarray, 
+                                 pred1_grid: np.ndarray, pred2_grid: np.ndarray,
+                                 puzzle_name: str, test_idx: int):
+    """Create a 4-panel composite visualization."""
+    fig, axes = plt.subplots(2, 2, figsize=(8, 8))
+    cmap = create_arc_colormap()
+    
+    grids = [input_grid, expected_grid, pred1_grid, pred2_grid]
+    titles = ["Input", "Expected", "Prediction 1", "Prediction 2"]
+    
+    for i, (grid, title) in enumerate(zip(grids, titles)):
+        ax = axes[i // 2, i % 2]
+        
+        # Convert to int32 to allow negative values for empty cells
+        grid_plot = grid.astype(np.int32)
+        # Use -1 for empty cells (value 0)
+        grid_plot[grid == 0] = -1
+        
+        im = ax.imshow(grid_plot, cmap=cmap, vmin=-1, vmax=9)
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        
+        # Add grid lines
+        for row in range(grid.shape[0] + 1):
+            ax.axhline(row - 0.5, color='black', linewidth=0.5)
+        for col in range(grid.shape[1] + 1):
+            ax.axvline(col - 0.5, color='black', linewidth=0.5)
+    
+    fig.suptitle(f"ARC Puzzle: {puzzle_name} (Test {test_idx})", fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    
+    # Convert to PIL Image
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.seek(0)
+    pil_image = Image.open(buf)
+    plt.close(fig)
+    
+    return pil_image
 
 @njit
 def _crop(grid: np.ndarray):
@@ -115,12 +205,16 @@ class ARC:
 
         submission = {}
         correct = [0.0 for _ in range(len(self.pass_Ks))]
+        visualization_images = {}  # Store images for wandb logging
+        puzzle_count = 0  # Track number of puzzles processed
 
         for name, puzzle in self.test_puzzles.items():
+            if puzzle_count >= 32:  # Only visualize first 32 puzzles
+                break
             # Process test examples in this puzzle
             submission[name] = []
             num_test_correct = [0 for _ in range(len(self.pass_Ks))]
-            for pair in puzzle["test"]:
+            for test_idx, pair in enumerate(puzzle["test"]):
                 input_hash = grid_hash(arc_grid_to_np(pair["input"]))
                 label_hash = grid_hash(arc_grid_to_np(pair["output"]))
                 
@@ -161,10 +255,29 @@ class ARC:
                     pred_grids.append(pred_grids[0])
                 
                 submission[name].append({f"attempt_{i + 1}": grid.tolist() for i, grid in enumerate(pred_grids)})
+                
+                # Create visualization for this test case
+                if len(pred_grids) >= 2:  # Ensure we have at least 2 predictions
+                    input_grid = arc_grid_to_np(pair["input"])
+                    expected_grid = arc_grid_to_np(pair["output"])
+                    pred1_grid = pred_grids[0]
+                    pred2_grid = pred_grids[1]
+                    
+                    # Create composite visualization
+                    viz_image = create_composite_visualization(
+                        input_grid, expected_grid, pred1_grid, pred2_grid,
+                        name, test_idx
+                    )
+                    
+                    # Store for wandb logging
+                    viz_key = f"ARC/viz/{name}_{test_idx}"
+                    visualization_images[viz_key] = wandb.Image(viz_image)
 
             # Total correctness
             for i in range(len(self.pass_Ks)):
                 correct[i] += num_test_correct[i] / len(puzzle["test"])
+            
+            puzzle_count += 1
 
         # Save submission
         if save_path is not None:
@@ -173,5 +286,16 @@ class ARC:
 
         # Final result
         all_results = {f"ARC/pass@{k}": correct[i] / len(self.test_puzzles) for i, k in enumerate(self.pass_Ks)}
+        
+        # Add visualization images to results
+        all_results.update(visualization_images)
+        
+        # Debug print
+        if len(visualization_images) > 0:
+            print(f"Generated {len(visualization_images)} visualization images for wandb logging")
+            for key in list(visualization_images.keys())[:3]:  # Show first 3 keys
+                print(f"  - {key}")
+        else:
+            print("No visualization images generated - check if puzzles have predictions")
 
         return all_results

@@ -575,8 +575,8 @@ def launch(hydra_config: DictConfig):
 
     try:
         evaluators = create_evaluators(config, eval_metadata)
-    except:
-        print("No evaluator found")
+    except Exception as e:
+        print(f"No evaluator found: {e}")
         evaluators = []
 
     # Train state
