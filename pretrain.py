@@ -24,6 +24,10 @@ from utils.functions import load_model_class, get_model_source_path
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from models.ema import EMAHelper
 
+from torchjd import backward
+from torchjd.aggregation import UPGrad
+
+aggregator = UPGrad()
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
@@ -82,6 +86,8 @@ class PretrainConfig(pydantic.BaseModel):
     ema: bool = False # use Exponential-Moving-Average
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
+
+    use_torchjd: bool = False
 
 @dataclass
 class TrainState:
@@ -300,9 +306,13 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
     # Forward
-    train_state.carry, loss, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
+    train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    ((1 / global_batch_size) * loss).backward()
+    if config.use_torchjd:
+        backward([(1 / global_batch_size) * loss for loss in losses], aggregator, parallel_chunk_size=1)
+    else:
+        loss = sum(losses)
+        ((1 / global_batch_size) * loss).backward()
 
     # Allreduce
     if world_size > 1:
@@ -384,7 +394,7 @@ def evaluate(
             # Forward
             inference_steps = 0
             while True:
-                carry, loss, metrics, preds, all_finish = train_state.model(
+                carry, losses, metrics, preds, all_finish = train_state.model(
                     carry=carry, batch=batch, return_keys=return_keys
                 )
                 inference_steps += 1
@@ -404,7 +414,7 @@ def evaluate(
             for evaluator in evaluators:
                 evaluator.update_batch(batch, preds)
 
-            del carry, loss, preds, batch, all_finish
+            del carry, losses, preds, batch, all_finish
 
             # Aggregate metrics
             set_id = set_ids[set_name]
