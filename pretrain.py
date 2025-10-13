@@ -89,6 +89,7 @@ class PretrainConfig(pydantic.BaseModel):
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
 
     grad_aggregation: AggregationStrategy = AggregationStrategy.SUM
+    grad_n_groups: int | None = None
 
 @dataclass
 class TrainState:
@@ -310,7 +311,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
     lm_loss, q_halt_loss = losses
-    losses = aggregate_losses(lm_loss, q_halt_loss, config.grad_aggregation)
+    losses = aggregate_losses(lm_loss, q_halt_loss, config.grad_aggregation, n_groups=config.grad_n_groups)
 
     if len(losses) == 1:
         loss = losses[0]

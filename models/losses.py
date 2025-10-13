@@ -92,8 +92,8 @@ class ACTLossHead(nn.Module):
         
         q_halt_loss = F.binary_cross_entropy_with_logits(outputs["q_halt_logits"], seq_is_correct.to(outputs["q_halt_logits"].dtype), reduction="none")
         metrics.update({
-            "lm_loss": lm_loss.detach(),
-            "q_halt_loss": q_halt_loss.detach(),
+            "lm_loss": lm_loss.sum().detach(),
+            "q_halt_loss": q_halt_loss.sum().detach(),
         })
 
         losses = [lm_loss, 0.5 * q_halt_loss]
@@ -106,7 +106,7 @@ class ACTLossHead(nn.Module):
             
             q_continue_loss = F.binary_cross_entropy_with_logits(outputs["q_continue_logits"], outputs["target_q_continue"], reduction="none")
 
-            metrics["q_continue_loss"] = q_continue_loss.detach()
+            metrics["q_continue_loss"] = q_continue_loss.sum().detach()
             
 
             losses.append(0.5 * q_continue_loss)
