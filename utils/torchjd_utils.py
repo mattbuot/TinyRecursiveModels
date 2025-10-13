@@ -48,9 +48,9 @@ def aggregate_losses(
             losses = torch.cat([lm_loss, q_halt_loss], dim=0)
 
         case AggregationStrategy.LM_LOSS_VS_Q_HALT_LOSS:
-            losses = torch.tensor([lm_loss.sum(), q_halt_loss.sum()])
+            losses = torch.stack([lm_loss.sum(), q_halt_loss.sum()])
         case AggregationStrategy.SUM:
-            losses = torch.tensor([lm_loss.sum() + q_halt_loss.sum()])
+            losses = torch.stack([lm_loss.sum() + q_halt_loss.sum()])
         case _:
             raise ValueError(f"Invalid aggregation strategy: {aggregation_strategy}")
 
