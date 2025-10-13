@@ -90,6 +90,9 @@ class PretrainConfig(pydantic.BaseModel):
 
     grad_aggregation: AggregationStrategy = AggregationStrategy.SUM
     grad_n_groups: int | None = None
+    
+    # Dropout
+    dropout: float = 0.1
 
 @dataclass
 class TrainState:
@@ -128,7 +131,8 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
         vocab_size=train_metadata.vocab_size,
         seq_len=train_metadata.seq_len,
         num_puzzle_identifiers=train_metadata.num_puzzle_identifiers,
-        causal=False  # Non-autoregressive
+        causal=False,  # Non-autoregressive
+        dropout=config.dropout
     )
 
     # Instantiate model with loss head

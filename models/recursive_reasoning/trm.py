@@ -61,6 +61,9 @@ class TinyRecursiveReasoningModel_ACTV1Config(BaseModel):
     mlp_t: bool = False # use mlp on L instead of transformer
     puzzle_emb_len: int = 16 # if non-zero, its specified to this value
     no_ACT_continue: bool =  True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense
+    
+    # Dropout
+    dropout: float = 0.1
 
 class TinyRecursiveReasoningModel_ACTV1Block(nn.Module):
     def __init__(self, config: TinyRecursiveReasoningModel_ACTV1Config) -> None:
@@ -86,6 +89,7 @@ class TinyRecursiveReasoningModel_ACTV1Block(nn.Module):
             expansion=config.expansion,
         )
         self.norm_eps = config.rms_norm_eps
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
         # B, L, D = hidden_states.shape
@@ -101,6 +105,8 @@ class TinyRecursiveReasoningModel_ACTV1Block(nn.Module):
         # Fully Connected
         out = self.mlp(hidden_states)
         hidden_states = rms_norm(hidden_states + out, variance_epsilon=self.norm_eps)
+        # Apply dropout
+        hidden_states = self.dropout(hidden_states)
         return hidden_states
 
 class TinyRecursiveReasoningModel_ACTV1ReasoningModule(nn.Module):
