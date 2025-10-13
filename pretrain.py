@@ -12,6 +12,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 import tqdm
+from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 import wandb
 import coolname
 import hydra
@@ -87,7 +88,7 @@ class PretrainConfig(pydantic.BaseModel):
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
 
-    use_torchjd: bool = False
+    grad_aggregation: AggregationStrategy = AggregationStrategy.SUM
 
 @dataclass
 class TrainState:
@@ -308,11 +309,14 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     # Forward
     train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    if config.use_torchjd:
-        backward([(1 / global_batch_size) * loss for loss in losses], aggregator, parallel_chunk_size=1)
-    else:
-        loss = sum(losses)
+    lm_loss, q_halt_loss = losses
+    losses = aggregate_losses(lm_loss, q_halt_loss, config.grad_aggregation)
+
+    if len(losses) == 1:
+        loss = losses[0]
         ((1 / global_batch_size) * loss).backward()
+    else:
+        backward([(1 / global_batch_size) * loss for loss in losses], aggregator, parallel_chunk_size=1)
 
     # Allreduce
     if world_size > 1:

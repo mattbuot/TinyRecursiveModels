@@ -86,11 +86,11 @@ class ACTLossHead(nn.Module):
 
         lm_loss = self.loss_fn(outputs["logits"], labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
         #print(f"LM Loss shape: {lm_loss.shape}")
-        lm_loss = (lm_loss / loss_divisor).sum()
+        lm_loss = (lm_loss / loss_divisor)
 
         #print(f"Q Halt Loss shape: {F.binary_cross_entropy_with_logits(outputs['q_halt_logits'], seq_is_correct.to(outputs['q_halt_logits'].dtype), reduction='none').shape}")
         
-        q_halt_loss = F.binary_cross_entropy_with_logits(outputs["q_halt_logits"], seq_is_correct.to(outputs["q_halt_logits"].dtype), reduction="sum")
+        q_halt_loss = F.binary_cross_entropy_with_logits(outputs["q_halt_logits"], seq_is_correct.to(outputs["q_halt_logits"].dtype), reduction="none")
         metrics.update({
             "lm_loss": lm_loss.detach(),
             "q_halt_loss": q_halt_loss.detach(),
@@ -102,9 +102,9 @@ class ACTLossHead(nn.Module):
         q_continue_loss = 0
         if "target_q_continue" in outputs:
 
-            print(f"Q Continue Loss shape: {F.binary_cross_entropy_with_logits(outputs['q_continue_logits'], outputs['target_q_continue'], reduction='none').shape}")
+            #print(f"Q Continue Loss shape: {F.binary_cross_entropy_with_logits(outputs['q_continue_logits'], outputs['target_q_continue'], reduction='none').shape}")
             
-            q_continue_loss = F.binary_cross_entropy_with_logits(outputs["q_continue_logits"], outputs["target_q_continue"], reduction="sum")
+            q_continue_loss = F.binary_cross_entropy_with_logits(outputs["q_continue_logits"], outputs["target_q_continue"], reduction="none")
 
             metrics["q_continue_loss"] = q_continue_loss.detach()
             
@@ -114,4 +114,3 @@ class ACTLossHead(nn.Module):
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
 
         return new_carry, losses, metrics, detached_outputs, new_carry.halted.all()
-
