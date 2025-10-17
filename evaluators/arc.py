@@ -1,18 +1,18 @@
-from typing import Dict, Sequence, Optional
-import os
-import json
-
-import torch
-import numpy as np
-from numba import njit
-import torch.distributed as dist
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from PIL import Image
 import io
-import wandb
+import json
+import os
+from typing import Dict, Optional, Sequence
 
-from dataset.build_arc_dataset import inverse_aug, grid_hash, arc_grid_to_np
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+import torch.distributed as dist
+from numba import njit
+from PIL import Image
+
+import wandb
+from dataset.build_arc_dataset import arc_grid_to_np, grid_hash, inverse_aug
 from dataset.common import PuzzleDatasetMetadata
 
 # Standard ARC color palette (RGB values for digits 0-9)
@@ -209,8 +209,7 @@ class ARC:
         puzzle_count = 0  # Track number of puzzles processed
 
         for name, puzzle in self.test_puzzles.items():
-            if puzzle_count >= 32:  # Only visualize first 32 puzzles
-                break
+
             # Process test examples in this puzzle
             submission[name] = []
             num_test_correct = [0 for _ in range(len(self.pass_Ks))]
@@ -240,6 +239,8 @@ class ARC:
                     for h, stats in p_map[:k]:
                         ok |= h == label_hash
                         
+                    if ok:
+                        print(f"Puzzle {name} is correct for pass@{k}")
                     num_test_correct[i] += ok
                     
                 # Query grids
@@ -257,7 +258,7 @@ class ARC:
                 submission[name].append({f"attempt_{i + 1}": grid.tolist() for i, grid in enumerate(pred_grids)})
                 
                 # Create visualization for this test case
-                if len(pred_grids) >= 2:  # Ensure we have at least 2 predictions
+                if len(pred_grids) >= 2 and puzzle_count < 32:  # Ensure we have at least 2 predictions
                     input_grid = arc_grid_to_np(pair["input"])
                     expected_grid = arc_grid_to_np(pair["output"])
                     pred1_grid = pred_grids[0]
