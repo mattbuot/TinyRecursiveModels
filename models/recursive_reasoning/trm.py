@@ -1,14 +1,25 @@
-from typing import Tuple, List, Dict, Optional
-from dataclasses import dataclass
-import math
-import torch
 import copy
-import torch.nn.functional as F
-from torch import nn
-from pydantic import BaseModel
+import math
 import random
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import torch
+import torch.nn.functional as F
+from pydantic import BaseModel
+from torch import nn
+
 from models.common import trunc_normal_init_
-from models.layers import rms_norm, LinearSwish, SwiGLU, Attention, RotaryEmbedding, CosSin, CastedEmbedding, CastedLinear
+from models.layers import (
+    Attention,
+    CastedEmbedding,
+    CastedLinear,
+    CosSin,
+    LinearSwish,
+    RotaryEmbedding,
+    SwiGLU,
+    rms_norm,
+)
 from models.sparse_embedding import CastedSparseEmbedding
 
 IGNORE_LABEL_ID = -100
@@ -177,7 +188,7 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
             if pad_count > 0:
                 puzzle_embedding = F.pad(puzzle_embedding, (0, pad_count))
 
-            embedding = torch.cat((puzzle_embedding.view(-1, self.puzzle_emb_len, self.config.hidden_size), embedding), dim=-2)
+            embedding = torch.cat((puzzle_embedding.contiguous().view(-1, self.puzzle_emb_len, self.config.hidden_size), embedding), dim=-2)
 
         # Position embeddings
         if self.config.pos_encodings == "learned":
@@ -195,8 +206,8 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
         
     def reset_carry(self, reset_flag: torch.Tensor, carry: TinyRecursiveReasoningModel_ACTV1InnerCarry):
         return TinyRecursiveReasoningModel_ACTV1InnerCarry(
-            z_H=torch.where(reset_flag.view(-1, 1, 1), self.H_init, carry.z_H),
-            z_L=torch.where(reset_flag.view(-1, 1, 1), self.L_init, carry.z_L),
+            z_H=torch.where(reset_flag.contiguous().view(-1, 1, 1), self.H_init, carry.z_H),
+            z_L=torch.where(reset_flag.contiguous().view(-1, 1, 1), self.L_init, carry.z_L),
         )
 
     def forward(self, carry: TinyRecursiveReasoningModel_ACTV1InnerCarry, batch: Dict[str, torch.Tensor]) -> Tuple[TinyRecursiveReasoningModel_ACTV1InnerCarry, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -259,7 +270,7 @@ class TinyRecursiveReasoningModel_ACTV1(nn.Module):
         
         new_steps = torch.where(carry.halted, 0, carry.steps)
 
-        new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
+        new_current_data = {k: torch.where(carry.halted.contiguous().view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
 
         # Forward inner model
         new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(new_inner_carry, new_current_data)

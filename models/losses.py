@@ -1,9 +1,9 @@
-from typing import Any, Tuple, Dict, Sequence, Optional
+import math
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-import math
 
 IGNORE_LABEL_ID = -100
 
@@ -35,7 +35,7 @@ def stablemax_cross_entropy(logits, labels, ignore_index: int = -100, valid_mask
 def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
     # Cast logits to f32
     # Flatten logits
-    return F.cross_entropy(logits.to(torch.float32).view(-1, logits.shape[-1]), labels.to(torch.long).view(-1), ignore_index=ignore_index, reduction="none").view(labels.shape)
+    return F.cross_entropy(logits.to(torch.float32).contiguous().view(-1, logits.shape[-1]), labels.to(torch.long).contiguous().view(-1), ignore_index=ignore_index, reduction="none").contiguous().view(labels.shape)
 
 
 class ACTLossHead(nn.Module):
