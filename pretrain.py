@@ -1,32 +1,30 @@
-from typing import Optional, Any, Sequence, List
-from dataclasses import dataclass
-import os
-import math
-import yaml
-import shutil
 import copy
+import math
+import os
+import shutil
+from dataclasses import dataclass
+from typing import Any, List, Optional, Sequence
 
-import torch
-import torch.distributed as dist
-from torch import nn
-from torch.utils.data import DataLoader
-
-import tqdm
-from utils.torchjd_utils import AggregationStrategy, aggregate_losses
-import wandb
 import coolname
 import hydra
 import pydantic
-from omegaconf import DictConfig
+import torch
+import torch.distributed as dist
+import tqdm
+import yaml
 from adam_atan2 import AdamATan2
-
-from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
-from utils.functions import load_model_class, get_model_source_path
-from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
-from models.ema import EMAHelper
-
+from omegaconf import DictConfig
+from torch import nn
+from torch.utils.data import DataLoader
 from torchjd import backward
 from torchjd.aggregation import UPGrad
+
+import wandb
+from models.ema import EMAHelper
+from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
+from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
+from utils.functions import get_model_source_path, load_model_class
+from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 
 aggregator = UPGrad()
 
@@ -93,6 +91,9 @@ class PretrainConfig(pydantic.BaseModel):
     
     # Dropout
     dropout: float = 0.1
+    
+    # Wandb
+    no_wandb: bool = False
 
 @dataclass
 class TrainState:
@@ -505,7 +506,7 @@ def evaluate(
     return reduced_metrics
 
 def save_code_and_config(config: PretrainConfig):
-    if config.checkpoint_path is None or wandb.run is None:
+    if config.checkpoint_path is None or (not config.no_wandb and wandb.run is None):
         return
 
     os.makedirs(config.checkpoint_path, exist_ok=True)
@@ -526,8 +527,9 @@ def save_code_and_config(config: PretrainConfig):
     with open(config_file, "wt") as f:
         yaml.dump(config.model_dump(), f)
 
-    # Log code
-    wandb.run.log_code(config.checkpoint_path)
+    # Log code only if wandb is enabled
+    if not config.no_wandb and wandb.run is not None:
+        wandb.run.log_code(config.checkpoint_path)
 
 
 def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> PretrainConfig:
@@ -606,8 +608,9 @@ def launch(hydra_config: DictConfig):
     ema_helper = None
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
-        wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
-        wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
+        if not config.no_wandb:
+            wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
+            wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
     if config.ema:
         print('Setup EMA')
@@ -626,7 +629,8 @@ def launch(hydra_config: DictConfig):
             metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
 
             if RANK == 0 and metrics is not None:
-                wandb.log(metrics, step=train_state.step)
+                if not config.no_wandb:
+                    wandb.log(metrics, step=train_state.step)
                 progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
             if config.ema:
                 ema_helper.update(train_state.model)
@@ -652,7 +656,8 @@ def launch(hydra_config: DictConfig):
                 cpu_group=CPU_PROCESS_GROUP)
 
             if RANK == 0 and metrics is not None:
-                wandb.log(metrics, step=train_state.step)
+                if not config.no_wandb:
+                    wandb.log(metrics, step=train_state.step)
                 
             ############ Checkpointing
             if RANK == 0:
@@ -666,7 +671,8 @@ def launch(hydra_config: DictConfig):
     # finalize
     if dist.is_initialized():
         dist.destroy_process_group()
-    wandb.finish()
+    if not config.no_wandb:
+        wandb.finish()
 
 
 if __name__ == "__main__":
