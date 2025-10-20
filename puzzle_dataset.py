@@ -13,7 +13,14 @@ from dataset.common import PuzzleDatasetMetadata
 from argdantic import ArgParser
 from pydantic import BaseModel
 
-def _sample_batch(rng: np.random.Generator, group_order: np.ndarray, puzzle_indices: np.ndarray, group_indices: np.ndarray, start_index: int, global_batch_size: int):
+def _sample_batch(
+    rng: np.random.Generator,
+    group_order: np.ndarray,
+    puzzle_indices: np.ndarray,
+    group_indices: np.ndarray,
+    start_index: int,
+    global_batch_size: int,
+    puzzle_weights: dict[int, float] | None = None):
     # Pack examples into a full batch
     batch = []
     batch_puzzle_indices = []
@@ -22,7 +29,24 @@ def _sample_batch(rng: np.random.Generator, group_order: np.ndarray, puzzle_indi
     while (start_index < group_order.size) and (current_size < global_batch_size):
         # Pick a group and a puzzle from that group
         group_id = group_order[start_index]
-        puzzle_id = rng.integers(group_indices[group_id], group_indices[group_id + 1])
+        # Sample puzzle from group
+        group_start = group_indices[group_id]
+        group_end = group_indices[group_id + 1]
+        group_puzzle_ids = np.arange(group_start, group_end)
+        
+        if puzzle_weights is not None:
+            # Use weighted sampling
+            group_weights = np.array([puzzle_weights.get(pid, 1.0) for pid in group_puzzle_ids])
+            # Normalize weights within the group
+            if group_weights.sum() > 0:
+                group_weights = group_weights / group_weights.sum()
+            else:
+                group_weights = np.ones_like(group_weights) / len(group_weights)
+            puzzle_id = rng.choice(group_puzzle_ids, p=group_weights)
+        else:
+            # Use uniform sampling (original behavior)
+            puzzle_id = rng.integers(group_start, group_end)
+            
         start_index += 1
 
         # Get range of the puzzle
@@ -111,6 +135,10 @@ class PuzzleDataset(IterableDataset):
         # State
         self._data = None
         self._iters = 0
+        self.puzzle_weights = None
+
+    def set_puzzle_weights(self, puzzle_weights: dict[int, float]):
+        self.puzzle_weights = puzzle_weights
 
     def _load_metadata(self, dataset_path) -> PuzzleDatasetMetadata:
         with open(os.path.join(dataset_path, self.split, "dataset.json"), "r") as f:
@@ -217,6 +245,7 @@ class PuzzleDataset(IterableDataset):
                     group_indices=dataset["group_indices"],
                     start_index=start_index,
                     global_batch_size=self.config.global_batch_size,
+                    puzzle_weights=self.puzzle_weights
                 )
 
                 # Select current rank and collate

@@ -1,3 +1,4 @@
+from collections import defaultdict
 import copy
 import math
 import os
@@ -81,6 +82,7 @@ class PretrainConfig(pydantic.BaseModel):
     seed: int = 0
     checkpoint_every_eval: bool = False
     eval_interval: Optional[int] = None
+    run_evaluator_only_at_end: bool = True
     min_eval_interval: Optional[int] = 0 # when to start eval
     eval_save_outputs: List[str] = []
 
@@ -96,6 +98,9 @@ class PretrainConfig(pydantic.BaseModel):
     
     # Wandb
     no_wandb: bool = False
+
+    # Custom sampling
+    custom_sampling: bool = True
 
 @dataclass
 class TrainState:
@@ -301,7 +306,7 @@ def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetada
 
     return evaluators
 
-def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int):
+def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int) -> tuple[dict[str, float] | None, dict[int, tuple[int, int]] | None]:
     train_state.step += 1
     if train_state.step > train_state.total_steps:  # At most train_total_steps
         return
@@ -357,14 +362,16 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             dist.reduce(metric_values_flatten, dst=0)
         if rank == 0:
             metric_values = metric_values.cpu().numpy()
-            metric_values_flatten = metric_values_flatten.cpu().numpy()
             reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
-            reduced_metrics_flatten = {k: metric_values_flatten[i] for i, k in enumerate(metric_keys_flatten)}
             
-            exact_accuracy = reduced_metrics_flatten["exact_accuracy_flatten"]
-            puzzle_ids = batch["puzzle_identifiers"].cpu().numpy()
-
-            puzzle_id_to_counts = compute_exact_accuracy_per_puzzle(puzzle_ids, exact_accuracy)
+            if config.custom_sampling:
+                metric_values_flatten = metric_values_flatten.cpu()
+                reduced_metrics_flatten = {k: metric_values_flatten[i] for i, k in enumerate(metric_keys_flatten)}
+                exact_accuracy = reduced_metrics_flatten["exact_accuracy_flatten"]
+                puzzle_ids = batch["puzzle_identifiers"].cpu()
+                puzzle_id_to_counts = compute_exact_accuracy_per_puzzle(puzzle_ids, exact_accuracy)
+            else:
+                puzzle_id_to_counts = None
 
             # Postprocess
             count = max(reduced_metrics["count"], 1)  # Avoid NaNs
@@ -373,15 +380,17 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             reduced_metrics["train/lr"] = lr_this_step
             return reduced_metrics, puzzle_id_to_counts
 
-def compute_exact_accuracy_per_puzzle(puzzle_ids: np.ndarray, exact_accuracy: np.ndarray) -> np.ndarray:
-    unique_ids, positions = np.unique(puzzle_ids, return_inverse=True)
+    return None, None
 
-    puzzle_counts = np.bincount(positions)
-    valid_puzzle_counts = np.bincount(positions, weights=exact_accuracy)
+def compute_exact_accuracy_per_puzzle(puzzle_ids: torch.Tensor, exact_accuracy: torch.Tensor) -> dict[int, tuple[int, int]]:
+    unique_ids, positions = torch.unique(puzzle_ids, sorted=True, return_inverse=True)
 
-    result = np.stack([unique_ids, puzzle_counts, valid_puzzle_counts], axis=1)
+    puzzle_counts = torch.bincount(positions)
+    valid_puzzle_counts = torch.bincount(positions, weights=exact_accuracy)
 
+    result = dict(zip(unique_ids.tolist(), zip(puzzle_counts.tolist(), valid_puzzle_counts.tolist())))
     return result
+
 
 def evaluate(
     config: PretrainConfig,
@@ -455,10 +464,10 @@ def evaluate(
                     sorted(metrics.keys())
                 )  # Sort keys to guarantee all processes use the same order.
                 metric_values = torch.zeros(
-                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device="cuda"
+                    (len(set_ids), len([k for k in metrics.keys() if not k.endswith("_flatten")])), dtype=torch.float32, device="cuda"
                 )
 
-            metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
+            metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys if not k.endswith("_flatten")])
 
             del metrics
 
@@ -485,7 +494,7 @@ def evaluate(
                 reduced_metrics = {
                     set_name: {
                         metric_name: reduced_metrics[set_id, metric_id]
-                        for metric_id, metric_name in enumerate(metric_keys)
+                        for metric_id, metric_name in enumerate([k for k in metric_keys if not k.endswith("_flatten")])
                     }
                     for set_id, set_name in enumerate(set_ids)
                 }
@@ -638,6 +647,11 @@ def launch(hydra_config: DictConfig):
         ema_helper = EMAHelper(mu=config.ema_rate)
         ema_helper.register(train_state.model)
 
+    if config.custom_sampling:
+        puzzle_id_counts = defaultdict(lambda: (0, 0))
+    else:
+        puzzle_id_counts = None
+
     # Training Loop
     for _iter_id in range(total_iters):
         print (f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
@@ -645,16 +659,33 @@ def launch(hydra_config: DictConfig):
         ############ Train Iter
         if RANK == 0:
             print("TRAIN")
+
+           
         train_state.model.train()
         for set_name, batch, global_batch_size in train_loader:
-            metrics, puzzle_id_counts = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+            metrics, new_puzzle_id_counts = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
 
             if RANK == 0 and metrics is not None:
                 if not config.no_wandb:
                     wandb.log(metrics, step=train_state.step)
+
+                if config.custom_sampling and new_puzzle_id_counts is not None:
+
+                    for puzzle_id, (count, valid_count) in new_puzzle_id_counts.items():
+                        puzzle_id_counts[puzzle_id] = (puzzle_id_counts[puzzle_id][0] + count, puzzle_id_counts[puzzle_id][1] + valid_count)
+
                 progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
             if config.ema:
                 ema_helper.update(train_state.model)
+
+        if RANK == 0 and config.custom_sampling and puzzle_id_counts:
+            puzzle_weights = {}
+            for puzzle_id, (total_count, correct_count) in puzzle_id_counts.items():
+                accuracy = correct_count / (total_count + 1)
+                weight = 1 - accuracy
+                puzzle_weights[puzzle_id] = weight
+
+            train_loader.dataset.set_puzzle_weights(puzzle_weights)
 
         if _iter_id >= config.min_eval_interval:
             ############ Evaluation
@@ -666,19 +697,21 @@ def launch(hydra_config: DictConfig):
                 train_state_eval.model = ema_helper.ema_copy(train_state_eval.model)
             else:
                 train_state_eval = train_state
-            train_state_eval.model.eval()
-            metrics = evaluate(config, 
-                train_state_eval, 
-                eval_loader, 
-                eval_metadata, 
-                evaluators,
-                rank=RANK, 
-                world_size=WORLD_SIZE,
-                cpu_group=CPU_PROCESS_GROUP)
 
-            if RANK == 0 and metrics is not None:
-                if not config.no_wandb:
-                    wandb.log(metrics, step=train_state.step)
+            if not config.run_evaluator_only_at_end or _iter_id == total_iters - 1:
+                train_state_eval.model.eval()
+                metrics = evaluate(config, 
+                    train_state_eval, 
+                    eval_loader, 
+                    eval_metadata, 
+                    evaluators,
+                    rank=RANK, 
+                    world_size=WORLD_SIZE,
+                    cpu_group=CPU_PROCESS_GROUP)
+
+                if RANK == 0 and metrics is not None:
+                    if not config.no_wandb:
+                        wandb.log(metrics, step=train_state.step)
                 
             ############ Checkpointing
             if RANK == 0 and (config.checkpoint_every_eval or (_iter_id == total_iters - 1)):
