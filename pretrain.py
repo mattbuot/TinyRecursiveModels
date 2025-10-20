@@ -25,6 +25,8 @@ from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import get_model_source_path, load_model_class
 from utils.torchjd_utils import AggregationStrategy, aggregate_losses
+import numpy as np
+
 
 aggregator = UPGrad()
 
@@ -345,22 +347,41 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     if len(metrics):
         assert not any(v.requires_grad for v in metrics.values())
 
-        metric_keys = list(sorted(metrics.keys()))  # Sort keys to guarantee all processes use the same order.
+        metric_keys = [m for m in sorted(metrics.keys()) if not m.endswith("_flatten")]  # Sort keys to guarantee all processes use the same order.
+        metric_keys_flatten = [m for m in sorted(metrics.keys()) if m.endswith("_flatten")]
         # Reduce and reconstruct
         metric_values = torch.stack([metrics[k] for k in metric_keys])
+        metric_values_flatten = torch.stack([metrics[k] for k in metric_keys_flatten])
         if world_size > 1:
             dist.reduce(metric_values, dst=0)
-
+            dist.reduce(metric_values_flatten, dst=0)
         if rank == 0:
             metric_values = metric_values.cpu().numpy()
+            metric_values_flatten = metric_values_flatten.cpu().numpy()
             reduced_metrics = {k: metric_values[i] for i, k in enumerate(metric_keys)}
+            reduced_metrics_flatten = {k: metric_values_flatten[i] for i, k in enumerate(metric_keys_flatten)}
             
+            exact_accuracy = reduced_metrics_flatten["exact_accuracy_flatten"]
+            puzzle_ids = batch["puzzle_identifiers"].cpu().numpy()
+
+            puzzle_id_to_counts = compute_exact_accuracy_per_puzzle(puzzle_ids, exact_accuracy)
+
             # Postprocess
             count = max(reduced_metrics["count"], 1)  # Avoid NaNs
             reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
             reduced_metrics["train/lr"] = lr_this_step
-            return reduced_metrics
+            return reduced_metrics, puzzle_id_to_counts
+
+def compute_exact_accuracy_per_puzzle(puzzle_ids: np.ndarray, exact_accuracy: np.ndarray) -> np.ndarray:
+    unique_ids, positions = np.unique(puzzle_ids, return_inverse=True)
+
+    puzzle_counts = np.bincount(positions)
+    valid_puzzle_counts = np.bincount(positions, weights=exact_accuracy)
+
+    result = np.stack([unique_ids, puzzle_counts, valid_puzzle_counts], axis=1)
+
+    return result
 
 def evaluate(
     config: PretrainConfig,
@@ -626,7 +647,7 @@ def launch(hydra_config: DictConfig):
             print("TRAIN")
         train_state.model.train()
         for set_name, batch, global_batch_size in train_loader:
-            metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+            metrics, puzzle_id_counts = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
 
             if RANK == 0 and metrics is not None:
                 if not config.no_wandb:

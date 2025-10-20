@@ -51,7 +51,8 @@
                 "data_paths=[data/arc1concept-aug-10]",
                 "epochs=50",
                 "eval_interval=5",
-                "global_batch_size=3072",
+                "global_batch_size=192",
+                "hidden_dim=128",
                 // "lr=2e-4",
                 // "puzzle_emb_lr=2e-4",
                 // "weight_decay=1.0",
@@ -61,6 +62,75 @@
                 "arch.L_cycles=4",
                 //"+run_name=${run_name}",
                 "ema=True"
+            ],
+            "env": {
+                // "run_name": "debug-run"
+                // "DISABLE_COMPILE": "1"
+            },
+            "justMyCode": false
+        },
+        {
+            "name": "Debug Pretrain TRM ARC AGI-2",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "torch.distributed.launch",
+            // "module": "pretrain",
+            "console": "integratedTerminal",
+            "args": [
+                "--use_env",
+                "--nproc-per-node", "1",
+                "--rdzv_backend", "c10d",
+                "--rdzv_endpoint", "localhost:0",
+                "--nnodes", "1",
+                "pretrain.py",
+                "arch=trm",
+                "data_paths=[data/arc2concept-aug-10]",
+                "epochs=50",
+                "eval_interval=5",
+                "global_batch_size=768",
+                "arch.hidden_size=256",
+                // "lr=2e-4",
+                // "puzzle_emb_lr=2e-4",
+                // "weight_decay=1.0",
+                "puzzle_emb_weight_decay=1.0",
+                "arch.L_layers=2",
+                "arch.H_cycles=3",
+                "arch.L_cycles=3",
+                //"+run_name=${run_name}",
+                "ema=True",
+                "+no_wandb=True"
+            ],
+            "env": {
+                // "run_name": "debug-run"
+                // "DISABLE_COMPILE": "1"
+            },
+            "justMyCode": false
+        },
+
+        {
+            "name": "Debug Pretrain TRM ARC AGI-2 - (no torch distributed)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/pretrain.py",
+            // "module": "pretrain",
+            "console": "integratedTerminal",
+            "args": [
+                "arch=trm",
+                "data_paths=[data/arc2concept-aug-10]",
+                "epochs=50",
+                "eval_interval=5",
+                "global_batch_size=768",
+                "arch.hidden_size=256",
+                // "lr=2e-4",
+                // "puzzle_emb_lr=2e-4",
+                // "weight_decay=1.0",
+                "puzzle_emb_weight_decay=1.0",
+                "arch.L_layers=2",
+                "arch.H_cycles=3",
+                "arch.L_cycles=3",
+                //"+run_name=${run_name}",
+                "ema=True",
+                "+no_wandb=True"
             ],
             "env": {
                 // "run_name": "debug-run"
