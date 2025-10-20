@@ -660,9 +660,8 @@ def launch(hydra_config: DictConfig):
                     wandb.log(metrics, step=train_state.step)
                 
             ############ Checkpointing
-            if RANK == 0:
-                print("SAVE CHECKPOINT")
             if RANK == 0 and (config.checkpoint_every_eval or (_iter_id == total_iters - 1)):
+                print(f"SAVE CHECKPOINT to {config.checkpoint_path}")
                 save_train_state(config, train_state_eval)
 
             if config.ema:
