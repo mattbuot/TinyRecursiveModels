@@ -116,21 +116,24 @@
             "console": "integratedTerminal",
             "args": [
                 "arch=trm",
-                "data_paths=[data/arc2concept-aug-10]",
-                "epochs=50",
-                "eval_interval=5",
-                "global_batch_size=768",
-                "arch.hidden_size=256",
-                // "lr=2e-4",
+                "data_paths=[data/arc2eval-aug-100]",
+                "epochs=1000",
+                "eval_interval=500",
+                "global_batch_size=192",
+                "arch.hidden_size=512",
+                "lr=4e-4",
                 // "puzzle_emb_lr=2e-4",
                 // "weight_decay=1.0",
                 "puzzle_emb_weight_decay=1.0",
                 "arch.L_layers=2",
                 "arch.H_cycles=3",
-                "arch.L_cycles=3",
+                "arch.L_cycles=4",
+                "+load_checkpoint=checkpoints/downloaded/Sanjin2024_TinyRecursiveModels-ARC-AGI-2/step_217602",
                 //"+run_name=${run_name}",
                 "ema=True",
-                "+no_wandb=True"
+                //"+no_wandb=True",
+                //"+grad_aggregation=iwrm_pixelwise_q_halt_in",
+                //"+grad_n_groups=10"
             ],
             "env": {
                 // "run_name": "debug-run"
