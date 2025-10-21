@@ -82,7 +82,7 @@ class PretrainConfig(pydantic.BaseModel):
     seed: int = 0
     checkpoint_every_eval: bool = False
     eval_interval: Optional[int] = None
-    run_evaluator_only_at_end: bool = True
+    run_evaluator_only_at_end: bool = False
     min_eval_interval: Optional[int] = 0 # when to start eval
     eval_save_outputs: List[str] = []
 
