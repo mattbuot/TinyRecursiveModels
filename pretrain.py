@@ -100,7 +100,7 @@ class PretrainConfig(pydantic.BaseModel):
     no_wandb: bool = False
 
     # Custom sampling
-    custom_sampling: bool = True
+    custom_sampling: bool = False
 
 @dataclass
 class TrainState:
