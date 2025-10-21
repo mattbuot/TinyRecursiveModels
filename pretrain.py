@@ -1,13 +1,14 @@
-from collections import defaultdict
 import copy
 import math
 import os
 import shutil
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence
 
 import coolname
 import hydra
+import numpy as np
 import pydantic
 import torch
 import torch.distributed as dist
@@ -26,10 +27,14 @@ from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import get_model_source_path, load_model_class
 from utils.torchjd_utils import AggregationStrategy, aggregate_losses
-import numpy as np
+
+
+def print_grammian(_, inputs, __):
+    print(inputs[0])
 
 
 aggregator = UPGrad()
+aggregator.weighting.weighting.register_forward_hook(print_grammian)
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
