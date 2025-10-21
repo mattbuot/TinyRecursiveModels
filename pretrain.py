@@ -32,6 +32,7 @@ from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 
 def print_grammian(_, inputs, __):
     print(inputs[0])
+    wandb.log({"grammian_min": inputs[0].min(), "grammian_mean": inputs[0].mean(), "grammian_median": inputs[0].median()})
 
 def log_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Tensor) -> None:
     """Prints the cosine similarity between the aggregation and the average gradient."""
@@ -89,7 +90,7 @@ class PretrainConfig(pydantic.BaseModel):
     # Names
     project_name: Optional[str] = None
     run_name: Optional[str] = None
-    load_checkpoint: Optional[str] = None
+    load_checkpoint: Optional[str] = None #"checkpoints/downloaded/Sanjin2024_TinyRecursiveModels-ARC-AGI-2/step_217602"
     checkpoint_path: Optional[str] = None
 
     # Extras
@@ -283,8 +284,20 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
         # Load state dict
         state_dict = torch.load(config.load_checkpoint, map_location="cuda")
 
+        # Remove _orig_mod prefix from all keys if present (happens with torch.compile)
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            print("Removing _orig_mod prefix from state_dict keys")
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                if key.startswith("_orig_mod."):
+                    new_key = key[len("_orig_mod."):]
+                    new_state_dict[new_key] = value
+                else:
+                    new_state_dict[key] = value
+            state_dict = new_state_dict
+
         # Resize and reset puzzle emb if needed
-        puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
+        puzzle_emb_name = "model.inner.puzzle_emb.weights"
         expected_shape: torch.Size = model.model.puzzle_emb.weights.shape  # type: ignore
         if puzzle_emb_name in state_dict:
             puzzle_emb = state_dict[puzzle_emb_name]
