@@ -117,8 +117,8 @@
             "args": [
                 "arch=trm",
                 "data_paths=[data/arc2concept-aug-10]",
-                "epochs=500",
-                "eval_interval=10",
+                "epochs=50",
+                "eval_interval=25",
                 "global_batch_size=768",
                 "arch.hidden_size=256",
                 "lr=4e-4",

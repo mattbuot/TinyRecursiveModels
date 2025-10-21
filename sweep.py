@@ -8,24 +8,6 @@ import wandb
 
 def train() -> None:
     """Training function for wandb sweep that reads config and launches training."""
-    # Initialize wandb run
-    #wandb.init()
-    
-    # Get sweep parameters from wandb config
-    #config = wandb.config
-    
-    # Build Hydra override arguments
-    #overrides = [
-    #    f"arch.H_cycles={config.H_cycles}",
-    #    f"arch.L_cycles={config.L_cycles}",
-    #    f'data_paths=[data/{config.data}]',
-    #    f"lr={config.lr}",
-    #]
-    overrides = []
-    
-    # Add run name with sweep parameters for identification
-    #run_name = f"sweep_H{config.H_cycles}_L{config.L_cycles}_lr{config.lr}_{config.data}"
-    #overrides.append(f"+run_name='{run_name}'")
     
     nproc_per_node = 2
     
@@ -41,7 +23,7 @@ def train() -> None:
         "epochs=4000",
         "eval_interval=200",
         '+load_checkpoint="checkpoints/downloaded/Sanjin2024_TinyRecursiveModels-ARC-AGI-2/step_217602"',
-        *overrides
+        '+in_sweep=True',
     ]
     
     print(f"Running command: {' '.join(cmd)}")

@@ -74,7 +74,7 @@ class PuzzleDatasetConfig(pydantic.BaseModel):
     num_replicas: int
 
 class PuzzleDataset(IterableDataset):
-    def __init__(self, config: PuzzleDatasetConfig, split: str = "train"):
+    def __init__(self, config: PuzzleDatasetConfig, split: str = "train", puzzle_weights: dict[int, float] | None = None):
         super().__init__()
         self.config = config
         self.split = split
@@ -135,9 +135,6 @@ class PuzzleDataset(IterableDataset):
         # State
         self._data = None
         self._iters = 0
-        self.puzzle_weights = None
-
-    def set_puzzle_weights(self, puzzle_weights: dict[int, float]):
         self.puzzle_weights = puzzle_weights
 
     def _load_metadata(self, dataset_path) -> PuzzleDatasetMetadata:

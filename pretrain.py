@@ -98,9 +98,10 @@ class PretrainConfig(pydantic.BaseModel):
     
     # Wandb
     no_wandb: bool = False
+    in_sweep: bool = False
 
     # Custom sampling
-    custom_sampling: bool = False
+    custom_sampling: bool = True
 
 @dataclass
 class TrainState:
@@ -113,14 +114,14 @@ class TrainState:
     total_steps: int
 
 
-def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, **kwargs):
+def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, puzzle_weights: dict[int, float] | None = None, **kwargs):
     dataset = PuzzleDataset(PuzzleDatasetConfig(
         seed=config.seed,
         dataset_paths=config.data_paths_test if len(config.data_paths_test)>0 and split=="test" else config.data_paths,
         rank=rank,
         num_replicas=world_size,
         **kwargs
-    ), split=split)
+    ), split=split, puzzle_weights=puzzle_weights)
     dataloader = DataLoader(
         dataset,
         batch_size=None,
@@ -575,13 +576,14 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
         if config.checkpoint_path is None:
             config.checkpoint_path = os.path.join("checkpoints", config.project_name, config.run_name)
 
-        print(f"CONFIG: {config}")
-        print(f"WANDB CONFIG: {wandb.config}")
-    
-        config.data_paths = [f"data/{wandb.config.data}"]
-        config.arch.H_cycles = wandb.config.H_cycles
-        config.arch.L_cycles = wandb.config.L_cycles
-        config.lr = wandb.config.lr
+
+        if config.in_sweep:
+            wandb.init(settings=wandb.Settings(_disable_stats=True))  # type: ignore
+        
+            config.data_paths = [f"data/{wandb.config.data}"]
+            config.arch.H_cycles = wandb.config.H_cycles
+            config.arch.L_cycles = wandb.config.L_cycles
+            config.lr = wandb.config.lr
 
         objects = [config]
 
@@ -612,9 +614,6 @@ def launch(hydra_config: DictConfig):
         assert (
             dist.get_rank(CPU_PROCESS_GROUP) == RANK and dist.get_world_size(CPU_PROCESS_GROUP) == WORLD_SIZE
         )
-
-    if RANK == 0:
-        wandb.init(settings=wandb.Settings(_disable_stats=True))  # type: ignore
 
     # Load sync'ed config
     config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)    
@@ -650,6 +649,8 @@ def launch(hydra_config: DictConfig):
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
         if not config.no_wandb:
+            if not config.in_sweep:
+                wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
             wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
     if config.ema:
@@ -695,7 +696,8 @@ def launch(hydra_config: DictConfig):
                 weight = 1 - accuracy
                 puzzle_weights[puzzle_id] = weight
 
-            train_loader.dataset.set_puzzle_weights(puzzle_weights)
+            train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=config.global_batch_size, rank=RANK, world_size=WORLD_SIZE, puzzle_weights=puzzle_weights)
+
 
         if _iter_id >= config.min_eval_interval:
             ############ Evaluation
