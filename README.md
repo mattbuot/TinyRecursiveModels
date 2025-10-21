@@ -118,6 +118,23 @@ arch.H_cycles=3 arch.L_cycles=6 \
 
 *Runtime:* < 36 hours
 
+## Hyperparameter Sweep
+
+To perform automated hyperparameter optimization using Weights & Biases, you can use the provided sweep script:
+
+```bash
+python sweep.py
+```
+
+This will:
+- Create a Bayesian optimization sweep over architecture parameters (H_cycles, L_cycles, hidden_size, num_heads)
+- Run 20 trials to find optimal hyperparameters using distributed training with torchrun
+- Use 8 GPUs per trial by default (configurable in sweep.py)
+- Log results to wandb for analysis
+- Optimize for validation accuracy
+
+The sweep configuration can be customized in `sweep.py` to sweep over different parameters or use different optimization strategies.
+
 ### Maze-Hard (assuming 4 L40S GPUs):
 
 ```bash
