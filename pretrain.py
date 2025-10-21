@@ -17,6 +17,7 @@ import yaml
 from adam_atan2 import AdamATan2
 from omegaconf import DictConfig
 from torch import nn
+from torch.nn.functional import cosine_similarity
 from torch.utils.data import DataLoader
 from torchjd import backward
 from torchjd.aggregation import UPGrad
@@ -32,9 +33,17 @@ from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 def print_grammian(_, inputs, __):
     print(inputs[0])
 
+def log_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Tensor) -> None:
+    """Prints the cosine similarity between the aggregation and the average gradient."""
+    matrix = inputs[0]
+    gd_output = matrix.mean(dim=0)
+    similarity = cosine_similarity(aggregation, gd_output, dim=0)
+    wandb.log({"gd_similarity": similarity.item()})
+
 
 aggregator = UPGrad()
 aggregator.weighting.weighting.register_forward_hook(print_grammian)
+aggregator.register_forward_hook(log_gd_similarity)
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
