@@ -9,24 +9,25 @@ import wandb
 def train() -> None:
     """Training function for wandb sweep that reads config and launches training."""
     # Initialize wandb run
-    wandb.init()
+    #wandb.init()
     
     # Get sweep parameters from wandb config
-    config = wandb.config
+    #config = wandb.config
     
     # Build Hydra override arguments
-    overrides = [
-        f"arch.H_cycles={config.H_cycles}",
-        f"arch.L_cycles={config.L_cycles}",
-        f'data_paths=[data/{config.data}]',
-        f"lr={config.lr}",
-    ]
+    #overrides = [
+    #    f"arch.H_cycles={config.H_cycles}",
+    #    f"arch.L_cycles={config.L_cycles}",
+    #    f'data_paths=[data/{config.data}]',
+    #    f"lr={config.lr}",
+    #]
+    overrides = []
     
     # Add run name with sweep parameters for identification
-    run_name = f"sweep_H{config.H_cycles}_L{config.L_cycles}_lr{config.lr}_{config.data}"
-    overrides.append(f"+run_name='{run_name}'")
+    #run_name = f"sweep_H{config.H_cycles}_L{config.L_cycles}_lr{config.lr}_{config.data}"
+    #overrides.append(f"+run_name='{run_name}'")
     
-    nproc_per_node = 1
+    nproc_per_node = 2
     
     # Construct torchrun command for distributed training
     cmd = [
@@ -66,13 +67,13 @@ def main() -> None:
         },
         'parameters': {
             'H_cycles': {
-                'values': [4, 6, 8]
+                'values': [3, 4]
             },
             'L_cycles': {
-                'values': [4, 6, 8]
+                'values': [3, 4]
             },
             'data': {
-                'values': ['arc2eval-aug-200', 'arc2eval-aug-400', 'arc2eval-aug-1000']
+                'values': ['arc2eval-aug-200', 'arc2eval-aug-400', 'arc2eval-aug-800']
             },
             'lr': {
                 'values': [1e-4, 2e-4]

@@ -575,6 +575,14 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
         if config.checkpoint_path is None:
             config.checkpoint_path = os.path.join("checkpoints", config.project_name, config.run_name)
 
+        print(f"CONFIG: {config}")
+        print(f"WANDB CONFIG: {wandb.config}")
+    
+        config.data_paths = [f"data/{wandb.config.data}"]
+        config.arch.H_cycles = wandb.config.H_cycles
+        config.arch.L_cycles = wandb.config.L_cycles
+        config.lr = wandb.config.lr
+
         objects = [config]
 
     if world_size > 1:
@@ -605,8 +613,11 @@ def launch(hydra_config: DictConfig):
             dist.get_rank(CPU_PROCESS_GROUP) == RANK and dist.get_world_size(CPU_PROCESS_GROUP) == WORLD_SIZE
         )
 
+    if RANK == 0:
+        wandb.init(settings=wandb.Settings(_disable_stats=True))  # type: ignore
+
     # Load sync'ed config
-    config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)
+    config = load_synced_config(hydra_config, rank=RANK, world_size=WORLD_SIZE)    
 
     # Seed RNGs to ensure consistency
     torch.random.manual_seed(config.seed + RANK)
@@ -639,7 +650,6 @@ def launch(hydra_config: DictConfig):
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
         if not config.no_wandb:
-            wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
             wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
     if config.ema:
