@@ -29,17 +29,22 @@ from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMeta
 from utils.functions import get_model_source_path, load_model_class
 from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 
+global_step = 0
+
 
 def print_grammian(_, inputs, __):
-    print(inputs[0])
-    wandb.log({"grammian_min": inputs[0].min(), "grammian_mean": inputs[0].mean(), "grammian_median": inputs[0].median()})
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        #print(inputs[0])
+        wandb.log({"grammian_min": inputs[0].min(), "grammian_mean": inputs[0].mean(), "grammian_median": inputs[0].median()},
+        step=global_step)
 
 def log_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Tensor) -> None:
     """Prints the cosine similarity between the aggregation and the average gradient."""
-    matrix = inputs[0]
-    gd_output = matrix.mean(dim=0)
-    similarity = cosine_similarity(aggregation, gd_output, dim=0)
-    wandb.log({"gd_similarity": similarity.item()})
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        matrix = inputs[0]
+        gd_output = matrix.mean(dim=0)
+        similarity = cosine_similarity(aggregation, gd_output, dim=0)
+        wandb.log({"gd_similarity": similarity.item()}, step=global_step)
 
 
 aggregator = UPGrad()
@@ -105,8 +110,11 @@ class PretrainConfig(pydantic.BaseModel):
     ema_rate: float = 0.999 # EMA-rate
     freeze_weights: bool = False # If True, freeze weights and only learn the embeddings
 
+    # TorchJD
     grad_aggregation: AggregationStrategy = AggregationStrategy.SUM
     grad_n_groups: int | None = None
+    differential_loss: bool = False
+    intermediate_loss_weight: float = 0.0001
     
     # Dropout
     dropout: float = 0.1
@@ -338,7 +346,10 @@ def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetada
     return evaluators
 
 def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int) -> tuple[dict[str, float] | None, dict[int, tuple[int, int]] | None]:
+    global global_step
+    
     train_state.step += 1
+    global_step = train_state.step
     if train_state.step > train_state.total_steps:  # At most train_total_steps
         return
 
@@ -353,8 +364,8 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     # Forward
     train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    lm_loss, q_halt_loss = losses
-    losses = aggregate_losses(lm_loss, q_halt_loss, config.grad_aggregation, n_groups=config.grad_n_groups)
+    lm_loss, q_halt_loss, internal_lm_losses = losses
+    losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
 
     if len(losses) == 1:
         loss = losses[0]

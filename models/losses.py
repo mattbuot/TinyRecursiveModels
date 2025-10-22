@@ -39,10 +39,11 @@ def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
 
 
 class ACTLossHead(nn.Module):
-    def __init__(self, model: nn.Module, loss_type: str):
+    def __init__(self, model: nn.Module, loss_type: str, differential_loss: bool):
         super().__init__()
         self.model = model
         self.loss_fn = globals()[loss_type]
+        self.differential_loss = differential_loss
         
     def initial_carry(self, *args, **kwargs):
         return self.model.initial_carry(*args, **kwargs)  # type: ignore
@@ -58,17 +59,18 @@ class ACTLossHead(nn.Module):
         previous_logits = model_kwargs["carry"].inner_carry.output_logits
         new_carry, outputs = self.model(**model_kwargs)
         labels = new_carry.current_data["labels"]
+        logits = outputs["logits"][-1]
 
         with torch.no_grad():
             # Preds
-            outputs["preds"] = torch.argmax(outputs["logits"], dim=-1)
+            outputs["preds"] = torch.argmax(logits, dim=-1)
 
             # Correctness
             mask = (labels != IGNORE_LABEL_ID)
             loss_counts = mask.sum(-1)
             loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
 
-            is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            is_correct = mask & (torch.argmax(logits, dim=-1) == labels)
             seq_is_correct = is_correct.sum(-1) == loss_counts
             
             # Metrics (halted)
@@ -85,8 +87,11 @@ class ACTLossHead(nn.Module):
             }
 
         # Losses
-
-        lm_loss = self.loss_fn(outputs["logits"] - previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)# - self.loss_fn(previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
+        internal_lm_losses = [self.loss_fn(outputs["logits"][i+1] - outputs["logits"][i].detach(), labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask) for i in range(len(outputs["logits"])-1)]
+        loss_input = logits - previous_logits if self.differential_loss else logits
+        lm_loss = self.loss_fn(loss_input, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)# - self.loss_fn(previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
+        
+        #lm_loss = self.loss_fn(logits - previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)# - self.loss_fn(previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
         #print(f"LM Loss shape: {lm_loss.shape}")
         lm_loss = (lm_loss / loss_divisor)
 
@@ -98,7 +103,7 @@ class ACTLossHead(nn.Module):
             "q_halt_loss": q_halt_loss.sum().detach(),
         })
 
-        losses = [lm_loss, 0.5 * q_halt_loss]
+        losses = [lm_loss, 0.5 * q_halt_loss, internal_lm_losses]
 
         # Q continue (bootstrapping target loss); Alexia: This fits Q-learning, but seems totally unecessary
         q_continue_loss = 0

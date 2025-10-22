@@ -2,7 +2,6 @@ import copy
 import math
 import random
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -38,7 +37,7 @@ class TinyRecursiveReasoningModelJD_ACTV1Carry:
     steps: torch.Tensor
     halted: torch.Tensor
     
-    current_data: Dict[str, torch.Tensor]
+    current_data: dict[str, torch.Tensor]
 
 
 class TinyRecursiveReasoningModelJD_ACTV1Config(BaseModel):
@@ -122,7 +121,7 @@ class TinyRecursiveReasoningModelJD_ACTV1Block(nn.Module):
         return hidden_states
 
 class TinyRecursiveReasoningModelJD_ACTV1ReasoningModule(nn.Module):
-    def __init__(self, layers: List[TinyRecursiveReasoningModelJD_ACTV1Block]):
+    def __init__(self, layers: list[TinyRecursiveReasoningModelJD_ACTV1Block]):
         super().__init__()
         self.layers = torch.nn.ModuleList(layers)
 
@@ -219,7 +218,7 @@ class TinyRecursiveReasoningModelJD_ACTV1_Inner(nn.Module):
             output_logits=torch.where(reset_flag.contiguous().view(-1, 1, 1), self.output_logits_init, carry.output_logits),
         )
 
-    def forward(self, carry: TinyRecursiveReasoningModelJD_ACTV1InnerCarry, batch: Dict[str, torch.Tensor]) -> Tuple[TinyRecursiveReasoningModelJD_ACTV1InnerCarry, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def forward(self, carry: TinyRecursiveReasoningModelJD_ACTV1InnerCarry, batch: dict[str, torch.Tensor]) -> tuple[TinyRecursiveReasoningModelJD_ACTV1InnerCarry, list[torch.Tensor], tuple[torch.Tensor, torch.Tensor]]:
         seq_info = dict(
             cos_sin=self.rotary_emb() if hasattr(self, "rotary_emb") else None,
         )
@@ -230,12 +229,17 @@ class TinyRecursiveReasoningModelJD_ACTV1_Inner(nn.Module):
         # Forward iterations
         it = 0
         z_H, z_L = carry.z_H, carry.z_L
+
+        outputs = [torch.zeros_like(carry.output_logits)]
         # H_cycles-1 without grad
-        with torch.no_grad():
-            for _H_step in range(self.config.H_cycles-1):
-                for _L_step in range(self.config.L_cycles):
-                    z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
-                z_H = self.L_level(z_H, z_L, **seq_info)
+        for _H_step in range(self.config.H_cycles-1):
+            for _L_step in range(self.config.L_cycles):
+                z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
+            z_H = self.L_level(z_H, z_L, **seq_info)
+            outputs.append(self.lm_head(z_H)[:, self.puzzle_emb_len:])
+            z_H, z_L, input_embeddings = z_H.detach(), z_L.detach(), input_embeddings.detach()
+        
+
         # 1 with grad
         for _L_step in range(self.config.L_cycles):
             z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
@@ -243,9 +247,10 @@ class TinyRecursiveReasoningModelJD_ACTV1_Inner(nn.Module):
 
         # LM Outputs
         output = self.lm_head(z_H)[:, self.puzzle_emb_len:]
+        outputs.append(output)
         new_carry = TinyRecursiveReasoningModelJD_ACTV1InnerCarry(z_H=z_H.detach(), z_L=z_L.detach(), output_logits=output.detach())  # New carry no grad
         q_logits = self.q_head(z_H[:, 0]).to(torch.float32) # Q-head; uses the first puzzle_emb position
-        return new_carry, output, (q_logits[..., 0], q_logits[..., 1])
+        return new_carry, outputs, (q_logits[..., 0], q_logits[..., 1])
 
 
 class TinyRecursiveReasoningModelJD_ACTV1(nn.Module):
@@ -260,7 +265,7 @@ class TinyRecursiveReasoningModelJD_ACTV1(nn.Module):
     def puzzle_emb(self):
         return self.inner.puzzle_emb
 
-    def initial_carry(self, batch: Dict[str, torch.Tensor]):
+    def initial_carry(self, batch: dict[str, torch.Tensor]):
         batch_size = batch["inputs"].shape[0]
 
         return TinyRecursiveReasoningModelJD_ACTV1Carry(
@@ -272,7 +277,7 @@ class TinyRecursiveReasoningModelJD_ACTV1(nn.Module):
             current_data={k: torch.empty_like(v) for k, v in batch.items()}
         )
         
-    def forward(self, carry: TinyRecursiveReasoningModelJD_ACTV1Carry, batch: Dict[str, torch.Tensor]) -> Tuple[TinyRecursiveReasoningModelJD_ACTV1Carry, Dict[str, torch.Tensor]]:
+    def forward(self, carry: TinyRecursiveReasoningModelJD_ACTV1Carry, batch: dict[str, torch.Tensor]) -> tuple[TinyRecursiveReasoningModelJD_ACTV1Carry, dict[str, torch.Tensor]]:
 
         # Update data, carry (removing halted sequences)
         new_inner_carry = self.inner.reset_carry(carry.halted, carry.inner_carry)
