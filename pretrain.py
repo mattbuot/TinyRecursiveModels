@@ -302,6 +302,9 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
                 state_dict[puzzle_emb_name] = (
                     torch.mean(puzzle_emb, dim=0, keepdim=True).expand(expected_shape).contiguous()
                 )
+
+        if "model.inner.output_logits_init" not in state_dict:
+            state_dict["model.inner.output_logits_init"] = model.model.inner.init_output_logits()
         model.load_state_dict(state_dict, assign=True)
 
 
