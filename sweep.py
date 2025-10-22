@@ -59,6 +59,9 @@ def main() -> None:
             },
             'lr': {
                 'values': [1e-4, 2e-4]
+            },
+            'halt_max_steps': {
+                "values": [8, 16, 24]
             }
         },
         'early_terminate': {

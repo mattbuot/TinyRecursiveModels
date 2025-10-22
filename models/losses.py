@@ -55,6 +55,7 @@ class ACTLossHead(nn.Module):
     ) -> Tuple[Any, list[torch.Tensor], Dict[str, torch.Tensor], Optional[Dict[str, torch.Tensor]], torch.Tensor]:
         # Model logits
         # B x SeqLen x D
+        previous_logits = model_kwargs["carry"].inner_carry.output_logits
         new_carry, outputs = self.model(**model_kwargs)
         labels = new_carry.current_data["labels"]
 
@@ -85,7 +86,7 @@ class ACTLossHead(nn.Module):
 
         # Losses
 
-        lm_loss = self.loss_fn(outputs["logits"], labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
+        lm_loss = self.loss_fn(outputs["logits"] - previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)# - self.loss_fn(previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
         #print(f"LM Loss shape: {lm_loss.shape}")
         lm_loss = (lm_loss / loss_divisor)
 
