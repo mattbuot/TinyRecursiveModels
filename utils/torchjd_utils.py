@@ -11,12 +11,15 @@ class AggregationStrategy(Enum):
     IWRM_PIXELWISE_Q_HALT_OUT = "iwrm_pixelwise_q_halt_out"
     LM_LOSS_VS_Q_HALT_LOSS = "lm_loss_vs_q_halt_loss"
     SUM = "sum"
+    STACK_INTERNAL_LOSSES = "stack_internal_losses"
 
 
 def aggregate_losses(
     lm_loss: torch.Tensor,
     q_halt_loss: torch.Tensor,
+    internal_lm_losses: list[torch.Tensor],
     aggregation_strategy: AggregationStrategy,
+    intermediate_loss_weight: float,
     n_groups: int | None = None,
 ) -> list[torch.Tensor]:
     
@@ -49,6 +52,13 @@ def aggregate_losses(
 
         case AggregationStrategy.LM_LOSS_VS_Q_HALT_LOSS:
             losses = torch.stack([lm_loss.sum(), q_halt_loss.sum()])
+
+        case AggregationStrategy.STACK_INTERNAL_LOSSES:
+            losses = torch.stack([lm_loss] + [intermediate_loss_weight * loss for loss in internal_lm_losses])
+            lm_loss = losses.sum(dim=(1, 2))
+            q_halt_loss = q_halt_loss.sum() / lm_loss.shape[0]
+            losses = lm_loss + q_halt_loss
+
         case AggregationStrategy.SUM:
             losses = torch.stack([lm_loss.sum() + q_halt_loss.sum()])
         case _:

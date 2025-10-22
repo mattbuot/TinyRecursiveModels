@@ -2,6 +2,7 @@ name: recursive_reasoning.trmjd@TinyRecursiveReasoningModelJD_ACTV1
 loss:
   name: losses@ACTLossHead
   loss_type: stablemax_cross_entropy
+  differential_loss: False
 
 halt_exploration_prob: 0.1
 halt_max_steps: 16
