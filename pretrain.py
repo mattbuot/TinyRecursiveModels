@@ -32,6 +32,17 @@ from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 global_step = 0
 
 
+def get_gpu_info():
+    """Get GPU count and GPU type information."""
+    if not torch.cuda.is_available():
+        return {"gpu_count": 0, "gpu_type": "none"}
+    
+    gpu_count = torch.cuda.device_count()
+    gpu_type = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
+    
+    return {"gpu_count": gpu_count, "gpu_type": gpu_type}
+
+
 def print_grammian(_, inputs, __):
     if not dist.is_initialized() or dist.get_rank() == 0:
         #print(inputs[0])
@@ -125,6 +136,10 @@ class PretrainConfig(pydantic.BaseModel):
 
     # Custom sampling
     custom_sampling: bool = True
+    
+    # GPU info (added dynamically)
+    gpu_count: int = 0
+    gpu_type: str = "unknown"
 
 @dataclass
 class TrainState:
@@ -608,6 +623,11 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
     objects = [None]
     if rank == 0:
         config = PretrainConfig(**hydra_config)  # type: ignore
+
+        # Add GPU information to config
+        gpu_info = get_gpu_info()
+        config.gpu_count = gpu_info["gpu_count"]
+        config.gpu_type = gpu_info["gpu_type"]
 
         # Naming
         if config.project_name is None:
