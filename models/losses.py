@@ -103,6 +103,9 @@ class ACTLossHead(nn.Module):
             "q_halt_loss": q_halt_loss.sum().detach(),
         })
 
+        for i, loss in enumerate(internal_lm_losses):
+            metrics[f"internal_lm_loss_{i}"] = loss.sum().detach()
+
         losses = [lm_loss, 0.5 * q_halt_loss, internal_lm_losses]
 
         # Q continue (bootstrapping target loss); Alexia: This fits Q-learning, but seems totally unecessary

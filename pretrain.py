@@ -125,7 +125,7 @@ class PretrainConfig(pydantic.BaseModel):
     grad_aggregation: AggregationStrategy = AggregationStrategy.SUM
     grad_n_groups: int | None = None
     differential_loss: bool = False
-    intermediate_loss_weight: float = 0.0001
+    intermediate_loss_weight: float = 1
     
     # Dropout
     dropout: float = 0.1
@@ -307,8 +307,20 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
         # Load state dict
         state_dict = torch.load(config.load_checkpoint, map_location="cuda")
 
-        # Remove _orig_mod prefix from all keys if present (happens with torch.compile)
-        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        # Handle _orig_mod prefix mismatch between checkpoint and compiled model
+        model_keys = set(model.state_dict().keys())
+        checkpoint_keys = set(state_dict.keys())
+        
+        # Check if model expects _orig_mod prefix but checkpoint doesn't have it
+        if any(key.startswith("_orig_mod.") for key in model_keys) and not any(key.startswith("_orig_mod.") for key in checkpoint_keys):
+            print("Adding _orig_mod prefix to state_dict keys for compiled model")
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                new_key = f"_orig_mod.{key}"
+                new_state_dict[new_key] = value
+            state_dict = new_state_dict
+        # Check if checkpoint has _orig_mod prefix but model doesn't expect it
+        elif any(key.startswith("_orig_mod.") for key in checkpoint_keys) and not any(key.startswith("_orig_mod.") for key in model_keys):
             print("Removing _orig_mod prefix from state_dict keys")
             new_state_dict = {}
             for key, value in state_dict.items():
@@ -321,6 +333,9 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
 
         # Resize and reset puzzle emb if needed
         puzzle_emb_name = "model.inner.puzzle_emb.weights"
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
+        
         expected_shape: torch.Size = model.model.puzzle_emb.weights.shape  # type: ignore
         if puzzle_emb_name in state_dict:
             puzzle_emb = state_dict[puzzle_emb_name]
@@ -331,8 +346,12 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
                     torch.mean(puzzle_emb, dim=0, keepdim=True).expand(expected_shape).contiguous()
                 )
 
-        if "model.inner.output_logits_init" not in state_dict:
-            state_dict["model.inner.output_logits_init"] = model.model.inner.init_output_logits()
+        output_logits_key = "model.inner.output_logits_init"
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            output_logits_key = "_orig_mod.model.inner.output_logits_init"
+            
+        if output_logits_key not in state_dict:
+            state_dict[output_logits_key] = model.model.inner.init_output_logits()
         model.load_state_dict(state_dict, assign=True)
 
 
@@ -393,6 +412,13 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         for param in train_state.model.parameters():
             if param.grad is not None:
                 dist.all_reduce(param.grad)
+
+    # Compute and store gradient norms
+    if rank == 0 and not config.no_wandb:
+        for name, param in train_state.model.named_parameters():
+            if param.grad is not None:
+                grad_norm = torch.norm(param.grad)
+                wandb.log({f"train/grad_norm_{name}": grad_norm.item()}, step=global_step)
             
     # Apply optimizer
     lr_this_step = None    
