@@ -29,17 +29,45 @@ from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMeta
 from utils.functions import get_model_source_path, load_model_class
 from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 
+global_step = 0
+global_no_wandb = True
+
+
+def get_gpu_info():
+    """Get GPU count and GPU type information."""
+    if not torch.cuda.is_available():
+        return {"gpu_count": 0, "gpu_type": "none"}
+    
+    gpu_count = torch.cuda.device_count()
+    gpu_type = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
+    
+    return {"gpu_count": gpu_count, "gpu_type": gpu_type}
+
+
+def get_gpu_info():
+    """Get GPU count and GPU type information."""
+    if not torch.cuda.is_available():
+        return {"gpu_count": 0, "gpu_type": "none"}
+    
+    gpu_count = torch.cuda.device_count()
+    gpu_type = torch.cuda.get_device_name(0) if gpu_count > 0 else "unknown"
+    
+    return {"gpu_count": gpu_count, "gpu_type": gpu_type}
+
 
 def print_grammian(_, inputs, __):
-    print(inputs[0])
-    wandb.log({"grammian_min": inputs[0].min(), "grammian_mean": inputs[0].mean(), "grammian_median": inputs[0].median()})
+    if (not dist.is_initialized() or dist.get_rank() == 0) and not global_no_wandb:
+        #print(inputs[0])
+        wandb.log({"grammian_min": inputs[0].min(), "grammian_mean": inputs[0].mean(), "grammian_median": inputs[0].median()},
+        step=global_step)
 
 def log_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Tensor) -> None:
     """Prints the cosine similarity between the aggregation and the average gradient."""
-    matrix = inputs[0]
-    gd_output = matrix.mean(dim=0)
-    similarity = cosine_similarity(aggregation, gd_output, dim=0)
-    wandb.log({"gd_similarity": similarity.item()})
+    if (not dist.is_initialized() or dist.get_rank() == 0) and not global_no_wandb:
+        matrix = inputs[0]
+        gd_output = matrix.mean(dim=0)
+        similarity = cosine_similarity(aggregation, gd_output, dim=0)
+        wandb.log({"gd_similarity": similarity.item()}, step=global_step)
 
 
 aggregator = UPGrad()
@@ -112,6 +140,14 @@ class PretrainConfig(pydantic.BaseModel):
     
     # Wandb
     no_wandb: bool = False
+    in_sweep: bool = False
+
+    # Custom sampling
+    custom_sampling: bool = True
+    
+    # GPU info (added dynamically)
+    gpu_count: int = 0
+    gpu_type: str = "unknown"
 
 @dataclass
 class TrainState:
@@ -330,7 +366,12 @@ def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetada
     return evaluators
 
 def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int):
+
+    global global_step
+
+
     train_state.step += 1
+    global_step = train_state.step
     if train_state.step > train_state.total_steps:  # At most train_total_steps
         return
 
@@ -567,6 +608,11 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
     if rank == 0:
         config = PretrainConfig(**hydra_config)  # type: ignore
 
+        # Add GPU information to config
+        gpu_info = get_gpu_info()
+        config.gpu_count = gpu_info["gpu_count"]
+        config.gpu_type = gpu_info["gpu_type"]
+
         # Naming
         if config.project_name is None:
             config.project_name = f"{os.path.basename(config.data_paths[0]).capitalize()}-ACT-torch"
@@ -638,6 +684,10 @@ def launch(hydra_config: DictConfig):
     ema_helper = None
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
+
+        global global_no_wandb
+        global_no_wandb = config.no_wandb
+        
         if not config.no_wandb:
             wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
             wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
