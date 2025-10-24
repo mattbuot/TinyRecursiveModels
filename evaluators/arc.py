@@ -175,7 +175,7 @@ class ARC:
                     else:
                         outputs[k] = v.cpu()
                         
-        assert q_values is not None
+        assert q_values is not None # TODO: Matthieu fix for no_act
 
         # Remove padding from outputs
         mask = outputs["puzzle_identifiers"] != self.blank_identifier_id
