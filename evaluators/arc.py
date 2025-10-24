@@ -3,6 +3,7 @@ import json
 import os
 from typing import Dict, Optional, Sequence
 
+from matplotlib.axes import Axes
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
@@ -38,6 +39,13 @@ def create_arc_colormap():
 def visualize_arc_grid(grid: np.ndarray, title: str = ""):
     """Visualize a single ARC grid with proper colors."""
     fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+    
+    create_arc_grid_ax(grid, ax, title)
+    plt.tight_layout()
+    return fig
+
+
+def create_arc_grid_ax(grid: np.ndarray, ax: Axes, title: str):
     cmap = create_arc_colormap()
     
     # Convert to int32 to allow negative values for empty cells
@@ -55,9 +63,7 @@ def visualize_arc_grid(grid: np.ndarray, title: str = ""):
         ax.axhline(i - 0.5, color='black', linewidth=0.5)
     for j in range(grid.shape[1] + 1):
         ax.axvline(j - 0.5, color='black', linewidth=0.5)
-    
-    plt.tight_layout()
-    return fig
+
 
 def create_composite_visualization(input_grid: np.ndarray, expected_grid: np.ndarray, 
                                  pred1_grid: np.ndarray, pred2_grid: np.ndarray,
