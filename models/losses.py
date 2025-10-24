@@ -124,3 +124,76 @@ class ACTLossHead(nn.Module):
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
 
         return new_carry, losses, metrics, detached_outputs, new_carry.halted.all()
+
+
+class NoACTLossHead(nn.Module):
+    def __init__(self, model: nn.Module, loss_type: str, differential_loss: bool):
+        super().__init__()
+        self.model = model
+        self.loss_fn = globals()[loss_type]
+        self.differential_loss = differential_loss
+        
+    def initial_carry(self, *args, **kwargs):
+        return self.model.initial_carry(*args, **kwargs)  # type: ignore
+
+    def forward(
+        self,
+        return_keys: Sequence[str],
+        # Model args
+        **model_kwargs,
+    ) -> Tuple[Any, list[torch.Tensor], Dict[str, torch.Tensor], Optional[Dict[str, torch.Tensor]], torch.Tensor]:
+        # Model logits
+        # B x SeqLen x D
+        previous_logits = model_kwargs["carry"].inner_carry.output_logits
+        new_carry, outputs = self.model(**model_kwargs)
+        labels = new_carry.current_data["labels"]
+        logits = outputs["logits"][-1]
+
+        with torch.no_grad():
+            # Preds
+            outputs["preds"] = torch.argmax(logits, dim=-1)
+
+            # Correctness
+            mask = (labels != IGNORE_LABEL_ID)
+            loss_counts = mask.sum(-1)
+            loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
+
+            is_correct = mask & (torch.argmax(logits, dim=-1) == labels)
+            seq_is_correct = is_correct.sum(-1) == loss_counts
+            
+            # Metrics (halted)
+            valid_metrics = new_carry.halted & (loss_counts > 0)
+            metrics = {
+                "count": valid_metrics.sum(),
+                
+                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
+                "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
+                "exact_accuracy_flatten": (valid_metrics & seq_is_correct),
+
+                "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
+            }
+
+        # Losses
+        internal_lm_losses = [self.loss_fn(outputs["logits"][i+1] - outputs["logits"][i].detach(), labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask) for i in range(len(outputs["logits"])-1)]
+        loss_input = logits - previous_logits if self.differential_loss else logits
+        lm_loss = self.loss_fn(loss_input, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)# - self.loss_fn(previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
+        
+        #lm_loss = self.loss_fn(logits - previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)# - self.loss_fn(previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
+        #print(f"LM Loss shape: {lm_loss.shape}")
+        lm_loss = (lm_loss / loss_divisor)
+
+        q_halt_loss = torch.tensor(0.0, device=lm_loss.device)
+        metrics.update({
+            "lm_loss": lm_loss.sum().detach(),
+            "q_halt_loss": q_halt_loss,
+        })
+
+        for i, loss in enumerate(internal_lm_losses):
+            metrics[f"internal_lm_loss_{i}"] = loss.sum().detach()
+
+        losses = [lm_loss, 0.5 * q_halt_loss, internal_lm_losses]
+
+        # Filter outputs for return
+        detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
+
+        return new_carry, losses, metrics, detached_outputs, new_carry.halted.all()

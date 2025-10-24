@@ -1,6 +1,6 @@
-name: recursive_reasoning.trmjd@TinyRecursiveReasoningModelJD_ACTV1
+name: recursive_reasoning.trmjd@TinyRecursiveReasoningModelJD_V1
 loss:
-  name: losses@ACTLossHead
+  name: losses@NoACTLossHead
   loss_type: stablemax_cross_entropy
   differential_loss: False
 
@@ -25,3 +25,5 @@ forward_dtype: bfloat16
 mlp_t: False # use mlp on L instead of transformer
 puzzle_emb_len: 16 # if non-zero, its specified to this value
 no_ACT_continue: True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense
+
+no_act: True

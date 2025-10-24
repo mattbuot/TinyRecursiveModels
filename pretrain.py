@@ -59,8 +59,8 @@ def log_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Te
 
 
 aggregator = UPGrad()
-aggregator.weighting.weighting.register_forward_hook(print_grammian)
-aggregator.register_forward_hook(log_gd_similarity)
+#aggregator.weighting.weighting.register_forward_hook(print_grammian)
+#aggregator.register_forward_hook(log_gd_similarity)
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
@@ -125,7 +125,7 @@ class PretrainConfig(pydantic.BaseModel):
     grad_aggregation: AggregationStrategy = AggregationStrategy.SUM
     grad_n_groups: int | None = None
     differential_loss: bool = False
-    intermediate_loss_weight: float = 1
+    intermediate_loss_weight: float = 0.0001
     
     # Dropout
     dropout: float = 0.1
@@ -352,7 +352,12 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
             
         if output_logits_key not in state_dict:
             state_dict[output_logits_key] = model.model.inner.init_output_logits()
-        model.load_state_dict(state_dict, assign=True)
+
+        if "NoACT" in config.arch.loss.name:
+            state_dict.pop("model.inner.q_head.weight")
+            state_dict.pop("model.inner.q_head.bias")
+
+        model.load_state_dict(state_dict, assign=True, strict=True)
 
 
 def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
