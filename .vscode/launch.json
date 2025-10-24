@@ -139,7 +139,7 @@
                 "data_paths=[data/arc2eval-aug-200]",
                 "epochs=4000",
                 "eval_interval=800",
-                "global_batch_size=192",
+                "global_batch_size=96",
                 "arch.hidden_size=512",
                 "arch.halt_max_steps=8",
                 "lr=2e-4",

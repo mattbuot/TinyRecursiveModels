@@ -194,6 +194,6 @@ class NoACTLossHead(nn.Module):
         losses = [lm_loss, 0.5 * q_halt_loss, internal_lm_losses]
 
         # Filter outputs for return
-        detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
+        detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs and outputs[k] is not None}
 
         return new_carry, losses, metrics, detached_outputs, new_carry.halted.all()

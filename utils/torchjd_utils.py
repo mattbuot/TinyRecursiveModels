@@ -13,6 +13,7 @@ class AggregationStrategy(Enum):
     SUM = "sum"
     STACK_INTERNAL_LOSSES = "stack_internal_losses"
     STACK_INTERNAL_LOSSES_ONLY = "stack_internal_losses_only"
+    STACK_SUPERVISIONS = "stack_supervisions"
     STACK_AND_SUM = "stack_and_sum"
 
 

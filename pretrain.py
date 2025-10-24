@@ -59,8 +59,8 @@ def log_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Te
 
 
 aggregator = UPGrad()
-#aggregator.weighting.weighting.register_forward_hook(print_grammian)
-#aggregator.register_forward_hook(log_gd_similarity)
+aggregator.weighting.weighting.register_forward_hook(print_grammian)
+aggregator.register_forward_hook(log_gd_similarity)
 
 class LossConfig(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(extra='allow')
@@ -354,8 +354,14 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
             state_dict[output_logits_key] = model.model.inner.init_output_logits()
 
         if "NoACT" in config.arch.loss.name:
-            state_dict.pop("model.inner.q_head.weight")
-            state_dict.pop("model.inner.q_head.bias")
+            if "model.inner.q_head.weight" in state_dict:
+                state_dict.pop("model.inner.q_head.weight")
+            if "model.inner.q_head.bias" in state_dict:
+                state_dict.pop("model.inner.q_head.bias")
+            if "_orig_mod.model.inner.q_head.weight" in state_dict:
+                state_dict.pop("_orig_mod.model.inner.q_head.weight")
+            if "_orig_mod.model.inner.q_head.bias" in state_dict:
+                state_dict.pop("_orig_mod.model.inner.q_head.bias")
 
         model.load_state_dict(state_dict, assign=True, strict=True)
 
@@ -400,11 +406,28 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         with torch.device("cuda"):
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
-    # Forward
-    train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    lm_loss, q_halt_loss, internal_lm_losses = losses
-    losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
+    if train_state.model.model.config.no_act:
+
+        assert config.grad_aggregation == AggregationStrategy.STACK_SUPERVISIONS, "Only STACK_SUPERVISIONS is supported for no_act"
+        all_finish = False
+        losses = []
+        iterations = 0
+        while not all_finish:
+            train_state.carry, loss_list, metrics, preds, all_finish = train_state.model(
+                carry=train_state.carry, batch=batch, return_keys=[]
+            )
+            # losses are the concatenation of lm_loss only
+            losses.append(loss_list[0].sum())
+            iterations += 1
+            
+            assert iterations <= config.arch.halt_max_steps, "Max iterations reached"
+    else:
+        # Forward
+        train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
+
+        lm_loss, q_halt_loss, internal_lm_losses = losses
+        losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
 
     if len(losses) == 1:
         loss = losses[0]
