@@ -174,6 +174,10 @@ class ARC:
                         q_values = v.to(torch.float64).sigmoid().cpu()
                     else:
                         outputs[k] = v.cpu()
+
+        if q_values is None:
+            print("No q_values found in batch")
+            q_values = torch.ones(outputs["preds"].shape[0])
                         
         # assert q_values is not None Matthieu: removed for no_act
 

@@ -138,8 +138,8 @@
                 "arch=trmjd",
                 "data_paths=[data/arc2eval-aug-200]",
                 "epochs=4000",
-                "eval_interval=800",
-                "global_batch_size=96",
+                "eval_interval=2",
+                "global_batch_size=48",
                 "arch.hidden_size=512",
                 "arch.halt_max_steps=8",
                 "lr=2e-4",
@@ -156,8 +156,8 @@
                 "+project_name=trmjd",
                 //"+run_name=${run_name}",
                 "ema=True",
-                //"+no_wandb=True",
-                "+grad_aggregation=stack_internal_losses",
+                "+no_wandb=True",
+                "+grad_aggregation=stack_supervisions",
                 //"+grad_n_groups=10"
             ],
             "env": {

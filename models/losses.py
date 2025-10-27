@@ -56,10 +56,17 @@ class ACTLossHead(nn.Module):
     ) -> Tuple[Any, list[torch.Tensor], Dict[str, torch.Tensor], Optional[Dict[str, torch.Tensor]], torch.Tensor]:
         # Model logits
         # B x SeqLen x D
-        previous_logits = model_kwargs["carry"].inner_carry.output_logits
+        
         new_carry, outputs = self.model(**model_kwargs)
         labels = new_carry.current_data["labels"]
-        logits = outputs["logits"][-1]
+        logits = outputs["logits"]
+        
+        if hasattr(model_kwargs["carry"].inner_carry, "output_logits"):
+            previous_logits = model_kwargs["carry"].inner_carry.output_logits
+        else:
+            print("No previous logits found in carry")
+            previous_logits = torch.zeros_like(logits)
+        
 
         with torch.no_grad():
             # Preds
@@ -87,7 +94,7 @@ class ACTLossHead(nn.Module):
             }
 
         # Losses
-        internal_lm_losses = [self.loss_fn(outputs["logits"][i+1] - outputs["logits"][i].detach(), labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask) for i in range(len(outputs["logits"])-1)]
+        #internal_lm_losses = [self.loss_fn(outputs["logits"][i+1] - outputs["logits"][i].detach(), labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask) for i in range(len(outputs["logits"])-1)]
         loss_input = logits - previous_logits if self.differential_loss else logits
         lm_loss = self.loss_fn(loss_input, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)# - self.loss_fn(previous_logits, labels, ignore_index=IGNORE_LABEL_ID, valid_mask=mask)
         
@@ -103,10 +110,10 @@ class ACTLossHead(nn.Module):
             "q_halt_loss": q_halt_loss.sum().detach(),
         })
 
-        for i, loss in enumerate(internal_lm_losses):
-            metrics[f"internal_lm_loss_{i}"] = loss.sum().detach()
+        # for i, loss in enumerate(internal_lm_losses):
+        #     metrics[f"internal_lm_loss_{i}"] = loss.sum().detach()
 
-        losses = [lm_loss, 0.5 * q_halt_loss, internal_lm_losses]
+        losses = [lm_loss, 0.5 * q_halt_loss, torch.tensor(0.0)]
 
         # Q continue (bootstrapping target loss); Alexia: This fits Q-learning, but seems totally unecessary
         q_continue_loss = 0

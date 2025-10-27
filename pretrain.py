@@ -30,6 +30,7 @@ from utils.functions import get_model_source_path, load_model_class
 from utils.torchjd_utils import AggregationStrategy, aggregate_losses
 
 global_step = 0
+global_no_wandb = True
 
 
 def get_gpu_info():
@@ -44,14 +45,14 @@ def get_gpu_info():
 
 
 def print_grammian(_, inputs, __):
-    if not dist.is_initialized() or dist.get_rank() == 0:
+    if (not dist.is_initialized() or dist.get_rank() == 0) and not global_no_wandb:
         #print(inputs[0])
         wandb.log({"grammian_min": inputs[0].min(), "grammian_mean": inputs[0].mean(), "grammian_median": inputs[0].median()},
         step=global_step)
 
 def log_gd_similarity(_, inputs: tuple[torch.Tensor, ...], aggregation: torch.Tensor) -> None:
     """Prints the cosine similarity between the aggregation and the average gradient."""
-    if not dist.is_initialized() or dist.get_rank() == 0:
+    if (not dist.is_initialized() or dist.get_rank() == 0) and not global_no_wandb:
         matrix = inputs[0]
         gd_output = matrix.mean(dim=0)
         similarity = cosine_similarity(aggregation, gd_output, dim=0)
@@ -350,7 +351,7 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
         if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
             output_logits_key = "_orig_mod.model.inner.output_logits_init"
             
-        if output_logits_key not in state_dict:
+        if output_logits_key not in state_dict and hasattr(model.model.inner, "init_output_logits"):
             state_dict[output_logits_key] = model.model.inner.init_output_logits()
 
         if "NoACT" in config.arch.loss.name:
@@ -407,7 +408,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
 
-    if train_state.model.model.config.no_act:
+    if hasattr(train_state.model.model.config, "no_act") and train_state.model.model.config.no_act:
 
         assert config.grad_aggregation == AggregationStrategy.STACK_SUPERVISIONS, "Only STACK_SUPERVISIONS is supported for no_act"
         all_finish = False
@@ -691,6 +692,8 @@ def load_synced_config(hydra_config: DictConfig, rank: int, world_size: int) -> 
         if config.checkpoint_path is None:
             config.checkpoint_path = os.path.join("checkpoints", config.project_name, config.run_name)
 
+        global global_no_wandb
+        global_no_wandb = config.no_wandb
 
         if config.in_sweep:
             wandb.init(settings=wandb.Settings(_disable_stats=True))  # type: ignore
