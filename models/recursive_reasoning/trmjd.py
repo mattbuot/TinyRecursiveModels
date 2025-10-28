@@ -237,7 +237,7 @@ class TinyRecursiveReasoningModelJD_ACTV1_Inner(nn.Module):
                 z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
             z_H = self.L_level(z_H, z_L, **seq_info)
             outputs.append(self.lm_head(z_H)[:, self.puzzle_emb_len:])
-            z_H, z_L, input_embeddings = z_H.detach(), z_L.detach(), input_embeddings.detach()
+            z_H, z_L = z_H.detach(), z_L.detach()
         
 
         # 1 with grad
