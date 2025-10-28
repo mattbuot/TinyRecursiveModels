@@ -328,6 +328,9 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
 
         # Resize and reset puzzle emb if needed
         puzzle_emb_name = "model.inner.puzzle_emb.weights"
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
+        
         expected_shape: torch.Size = model.model.puzzle_emb.weights.shape  # type: ignore
         if puzzle_emb_name in state_dict:
             puzzle_emb = state_dict[puzzle_emb_name]
@@ -338,9 +341,14 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
                     torch.mean(puzzle_emb, dim=0, keepdim=True).expand(expected_shape).contiguous()
                 )
 
-        if "model.inner.output_logits_init" not in state_dict:
-            state_dict["model.inner.output_logits_init"] = model.model.inner.init_output_logits()
-        model.load_state_dict(state_dict, assign=True)
+        output_logits_key = "model.inner.output_logits_init"
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            output_logits_key = "_orig_mod.model.inner.output_logits_init"
+            
+        if output_logits_key not in state_dict and hasattr(model.model.inner, "init_output_logits"):
+            state_dict[output_logits_key] = model.model.inner.init_output_logits()
+
+        model.load_state_dict(state_dict, assign=True, strict=True)
 
 
 def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
@@ -441,6 +449,8 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
 
             reduced_metrics["train/lr"] = lr_this_step
             return reduced_metrics, puzzle_id_to_counts
+
+    return None, None
 
 def compute_exact_accuracy_per_puzzle(puzzle_ids: np.ndarray, exact_accuracy: np.ndarray) -> np.ndarray:
     unique_ids, positions = np.unique(puzzle_ids, return_inverse=True)
