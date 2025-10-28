@@ -315,8 +315,20 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
         # Load state dict
         state_dict = torch.load(config.load_checkpoint, map_location="cuda")
 
-        # Remove _orig_mod prefix from all keys if present (happens with torch.compile)
-        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        # Handle _orig_mod prefix mismatch between checkpoint and compiled model
+        model_keys = set(model.state_dict().keys())
+        checkpoint_keys = set(state_dict.keys())
+        
+        # Check if model expects _orig_mod prefix but checkpoint doesn't have it
+        if any(key.startswith("_orig_mod.") for key in model_keys) and not any(key.startswith("_orig_mod.") for key in checkpoint_keys):
+            print("Adding _orig_mod prefix to state_dict keys for compiled model")
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                new_key = f"_orig_mod.{key}"
+                new_state_dict[new_key] = value
+            state_dict = new_state_dict
+        # Check if checkpoint has _orig_mod prefix but model doesn't expect it
+        elif any(key.startswith("_orig_mod.") for key in checkpoint_keys) and not any(key.startswith("_orig_mod.") for key in model_keys):
             print("Removing _orig_mod prefix from state_dict keys")
             new_state_dict = {}
             for key, value in state_dict.items():
@@ -329,6 +341,9 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
 
         # Resize and reset puzzle emb if needed
         puzzle_emb_name = "model.inner.puzzle_emb.weights"
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            puzzle_emb_name = "_orig_mod.model.inner.puzzle_emb.weights"
+        
         expected_shape: torch.Size = model.model.puzzle_emb.weights.shape  # type: ignore
         if puzzle_emb_name in state_dict:
             puzzle_emb = state_dict[puzzle_emb_name]
@@ -338,7 +353,15 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
                 state_dict[puzzle_emb_name] = (
                     torch.mean(puzzle_emb, dim=0, keepdim=True).expand(expected_shape).contiguous()
                 )
-        model.load_state_dict(state_dict, assign=True)
+
+        output_logits_key = "model.inner.output_logits_init"
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            output_logits_key = "_orig_mod.model.inner.output_logits_init"
+            
+        if output_logits_key not in state_dict and hasattr(model.model.inner, "init_output_logits"):
+            state_dict[output_logits_key] = model.model.inner.init_output_logits()
+
+        model.load_state_dict(state_dict, assign=True, strict=True)
 
 
 def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
@@ -687,7 +710,7 @@ def launch(hydra_config: DictConfig):
 
         global global_no_wandb
         global_no_wandb = config.no_wandb
-        
+
         if not config.no_wandb:
             wandb.init(project=config.project_name, name=config.run_name, config=config.model_dump(), settings=wandb.Settings(_disable_stats=True))  # type: ignore
             wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
