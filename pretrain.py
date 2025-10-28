@@ -534,11 +534,11 @@ def evaluate(
                     sorted(metrics.keys())
                 )  # Sort keys to guarantee all processes use the same order.
                 metric_values = torch.zeros(
-                    (len(set_ids), len(metrics.values())), dtype=torch.float32, device="cuda"
+                    (len(set_ids), len([k for k in metrics.keys() if not k.endswith("_flatten")])), dtype=torch.float32, device="cuda"
                 )
 
-            metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys])
-
+            metric_values[set_id] += torch.stack([metrics[k] for k in metric_keys if not k.endswith("_flatten")])
+            
             del metrics
 
         # concatenate save preds
@@ -564,7 +564,7 @@ def evaluate(
                 reduced_metrics = {
                     set_name: {
                         metric_name: reduced_metrics[set_id, metric_id]
-                        for metric_id, metric_name in enumerate(metric_keys)
+                        for metric_id, metric_name in enumerate([k for k in metric_keys if not k.endswith("_flatten")])
                     }
                     for set_id, set_name in enumerate(set_ids)
                 }
