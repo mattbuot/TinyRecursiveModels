@@ -410,7 +410,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
 
     if hasattr(train_state.model.model.config, "no_act") and train_state.model.model.config.no_act:
 
-        assert config.grad_aggregation == AggregationStrategy.STACK_SUPERVISIONS, "Only STACK_SUPERVISIONS is supported for no_act"
+        assert config.grad_aggregation == AggregationStrategy.STACK_SUPERVISIONS or config.grad_aggregation == AggregationStrategy.SUM, "Only STACK_SUPERVISIONS or SUM is supported for no_act"
         all_finish = False
         losses = []
         iterations = 0
@@ -421,6 +421,9 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             # losses are the concatenation of lm_loss only
             losses.append(loss_list[0].sum())
             iterations += 1
+
+            if config.grad_aggregation == AggregationStrategy.SUM:
+                losses = [sum(losses)]
             
             assert iterations <= config.arch.halt_max_steps, "Max iterations reached"
     else:
