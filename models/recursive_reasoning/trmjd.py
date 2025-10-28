@@ -229,17 +229,12 @@ class TinyRecursiveReasoningModelJD_ACTV1_Inner(nn.Module):
         # Forward iterations
         it = 0
         z_H, z_L = carry.z_H, carry.z_L
-
-        outputs = [torch.zeros_like(carry.output_logits)]
         # H_cycles-1 without grad
-        for _H_step in range(self.config.H_cycles-1):
-            for _L_step in range(self.config.L_cycles):
-                z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
-            z_H = self.L_level(z_H, z_L, **seq_info)
-            outputs.append(self.lm_head(z_H)[:, self.puzzle_emb_len:])
-            z_H, z_L, input_embeddings = z_H.detach(), z_L.detach(), input_embeddings.detach()
-        
-
+        with torch.no_grad():
+            for _H_step in range(self.config.H_cycles-1):
+                for _L_step in range(self.config.L_cycles):
+                    z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
+                z_H = self.L_level(z_H, z_L, **seq_info)
         # 1 with grad
         for _L_step in range(self.config.L_cycles):
             z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
@@ -247,10 +242,9 @@ class TinyRecursiveReasoningModelJD_ACTV1_Inner(nn.Module):
 
         # LM Outputs
         output = self.lm_head(z_H)[:, self.puzzle_emb_len:]
-        outputs.append(output)
         new_carry = TinyRecursiveReasoningModelJD_ACTV1InnerCarry(z_H=z_H.detach(), z_L=z_L.detach(), output_logits=output.detach())  # New carry no grad
         q_logits = self.q_head(z_H[:, 0]).to(torch.float32) # Q-head; uses the first puzzle_emb position
-        return new_carry, outputs, (q_logits[..., 0], q_logits[..., 1])
+        return new_carry, output, (q_logits[..., 0], q_logits[..., 1])
 
 
 class TinyRecursiveReasoningModelJD_ACTV1(nn.Module):
