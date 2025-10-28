@@ -123,7 +123,6 @@ class PretrainConfig(pydantic.BaseModel):
     # TorchJD
     grad_aggregation: AggregationStrategy = AggregationStrategy.SUM
     grad_n_groups: int | None = None
-    differential_loss: bool = False
     intermediate_loss_weight: float = 0.0001
     
     # Dropout
@@ -136,7 +135,7 @@ class PretrainConfig(pydantic.BaseModel):
     gpu_count: int = 0
     gpu_type: str = "unknown"
 
-    
+
 @dataclass
 class TrainState:
     model: nn.Module
@@ -303,8 +302,20 @@ def load_checkpoint(model: nn.Module, config: PretrainConfig):
         # Load state dict
         state_dict = torch.load(config.load_checkpoint, map_location="cuda")
 
-        # Remove _orig_mod prefix from all keys if present (happens with torch.compile)
-        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        # Handle _orig_mod prefix mismatch between checkpoint and compiled model
+        model_keys = set(model.state_dict().keys())
+        checkpoint_keys = set(state_dict.keys())
+        
+        # Check if model expects _orig_mod prefix but checkpoint doesn't have it
+        if any(key.startswith("_orig_mod.") for key in model_keys) and not any(key.startswith("_orig_mod.") for key in checkpoint_keys):
+            print("Adding _orig_mod prefix to state_dict keys for compiled model")
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                new_key = f"_orig_mod.{key}"
+                new_state_dict[new_key] = value
+            state_dict = new_state_dict
+        # Check if checkpoint has _orig_mod prefix but model doesn't expect it
+        elif any(key.startswith("_orig_mod.") for key in checkpoint_keys) and not any(key.startswith("_orig_mod.") for key in model_keys):
             print("Removing _orig_mod prefix from state_dict keys")
             new_state_dict = {}
             for key, value in state_dict.items():
