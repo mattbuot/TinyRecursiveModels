@@ -414,16 +414,18 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
         all_finish = False
         losses = []
         iterations = 0
+        iteration_metrics = {}
         while not all_finish:
             train_state.carry, loss_list, metrics, preds, all_finish = train_state.model(
                 carry=train_state.carry, batch=batch, return_keys=[]
             )
             # losses are the concatenation of lm_loss only
-            metrics[f"lm_loss_{iterations}"] = loss_list[0].sum().detach()
+            iteration_metrics[f"lm_loss_{iterations}"] = loss_list[0].sum().detach()
             losses.append(loss_list[0].sum())
             iterations += 1
             
             assert iterations <= config.arch.halt_max_steps, "Max iterations reached"
+        metrics.update(iteration_metrics)
     else:
         # Forward
         train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
