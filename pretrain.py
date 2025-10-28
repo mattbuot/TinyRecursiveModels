@@ -398,8 +398,28 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     # Forward
     train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
-    lm_loss, q_halt_loss, internal_lm_losses = losses
-    losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
+    if hasattr(train_state.model.model.config, "no_act") and train_state.model.model.config.no_act:
+
+        assert config.grad_aggregation == AggregationStrategy.STACK_SUPERVISIONS, "Only STACK_SUPERVISIONS is supported for no_act"
+        all_finish = False
+        losses = []
+        iterations = 0
+        while not all_finish:
+            train_state.carry, loss_list, metrics, preds, all_finish = train_state.model(
+                carry=train_state.carry, batch=batch, return_keys=[]
+            )
+            # losses are the concatenation of lm_loss only
+            metrics[f"lm_loss_{iterations}"] = loss_list[0].sum().detach()
+            losses.append(loss_list[0].sum())
+            iterations += 1
+            
+            assert iterations <= config.arch.halt_max_steps, "Max iterations reached"
+    else:
+        # Forward
+        train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
+
+        lm_loss, q_halt_loss, internal_lm_losses = losses
+        losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
 
     if len(losses) == 1:
         loss = losses[0]
