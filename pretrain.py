@@ -419,6 +419,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
                 carry=train_state.carry, batch=batch, return_keys=[]
             )
             # losses are the concatenation of lm_loss only
+            metrics[f"lm_loss_{iterations}"] = loss_list[0].sum().detach()
             losses.append(loss_list[0].sum())
             iterations += 1
             
