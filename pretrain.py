@@ -421,7 +421,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             )
             # losses are the concatenation of lm_loss only
             iteration_metrics[f"lm_loss_{iterations}"] = loss_list[0].sum().detach()
-            losses.append(loss_list[0].sum())
+            losses.append(loss_list[0].sum() / config.arch.halt_max_steps)
             iterations += 1
 
             if config.grad_aggregation == AggregationStrategy.SUM:
