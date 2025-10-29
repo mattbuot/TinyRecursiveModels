@@ -408,11 +408,10 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
 
-    if hasattr(train_state.model.model.config, "no_act") and train_state.model.model.config.no_act:
-
-        assert config.grad_aggregation == AggregationStrategy.STACK_SUPERVISIONS or config.grad_aggregation == AggregationStrategy.SUM, "Only STACK_SUPERVISIONS or SUM is supported for no_act"
+    if config.grad_aggregation.is_stack_supervisions():
+        
         all_finish = False
-        losses = []
+        lm_loss = []
         iterations = 0
         iteration_metrics = {}
         while not all_finish:
@@ -421,20 +420,22 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             )
             # losses are the concatenation of lm_loss only
             iteration_metrics[f"lm_loss_{iterations}"] = loss_list[0].sum().detach()
-            losses.append(loss_list[0].sum() / config.arch.halt_max_steps)
+            lm_loss.append(loss_list[0] / config.arch.halt_max_steps)
             iterations += 1
-
-            if config.grad_aggregation == AggregationStrategy.SUM:
-                losses = [sum(losses)]
             
             assert iterations <= config.arch.halt_max_steps, "Max iterations reached"
+
         metrics.update(iteration_metrics)
+        q_halt_loss = None
+        internal_lm_losses = None
+
     else:
         # Forward
         train_state.carry, losses, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
 
         lm_loss, q_halt_loss, internal_lm_losses = losses
-        losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
+    
+    losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
 
     if len(losses) == 1:
         loss = losses[0]

@@ -157,8 +157,8 @@
                 //"+run_name=${run_name}",
                 "ema=True",
                 "+no_wandb=True",
-                "+grad_aggregation=stack_supervisions",
-                //"+grad_n_groups=10"
+                "+grad_aggregation=stack_supervisions_and_iwrm_pixelwise",
+                "+grad_n_groups=4"
             ],
             "env": {
                 // "run_name": "debug-run"

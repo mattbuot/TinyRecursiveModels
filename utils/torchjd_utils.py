@@ -14,17 +14,33 @@ class AggregationStrategy(Enum):
     STACK_INTERNAL_LOSSES = "stack_internal_losses"
     STACK_INTERNAL_LOSSES_ONLY = "stack_internal_losses_only"
     STACK_SUPERVISIONS = "stack_supervisions"
-    STACK_AND_SUM = "stack_and_sum"
+    STACK_SUPERVISIONS_AND_SUM = "stack_supervisions_and_sum"
+    STACK_SUPERVISIONS_AND_IWRM = "stack_supervisions_and_iwrm"
+    STACK_SUPERVISIONS_AND_PIXELWISE = "stack_supervisions_and_pixelwise"
+    STACK_SUPERVISIONS_AND_IWRM_PIXELWISE = "stack_supervisions_and_iwrm_pixelwise"
+    STACK_INTERNAL_AND_SUM = "stack_internal_and_sum"
+
+    def is_stack_supervisions(self) -> bool:
+        return self in (AggregationStrategy.STACK_SUPERVISIONS,
+                        AggregationStrategy.STACK_SUPERVISIONS_AND_IWRM,
+                        AggregationStrategy.STACK_SUPERVISIONS_AND_SUM,
+                        AggregationStrategy.STACK_SUPERVISIONS_AND_PIXELWISE,
+                        AggregationStrategy.STACK_SUPERVISIONS_AND_IWRM_PIXELWISE)
 
 
 def aggregate_losses(
-    lm_loss: torch.Tensor,
-    q_halt_loss: torch.Tensor,
-    internal_lm_losses: list[torch.Tensor],
+    lm_loss: torch.Tensor | list[torch.Tensor],
+    q_halt_loss: torch.Tensor | None,
+    internal_lm_losses: list[torch.Tensor] | None,
     aggregation_strategy: AggregationStrategy,
     intermediate_loss_weight: float,
     n_groups: int | None = None,
 ) -> list[torch.Tensor]:
+
+    if isinstance(lm_loss, list) and not aggregation_strategy.is_stack_supervisions():
+        # should not happen
+        raise ValueError(f"lm_loss is a list but aggregation strategy is not stack_supervisions: {aggregation_strategy}")
+        # lm_loss = torch.stack(lm_loss).sum()
     
     match aggregation_strategy:
         case AggregationStrategy.IWRM_WITH_Q_HALT_IN:
@@ -70,8 +86,29 @@ def aggregate_losses(
         case AggregationStrategy.SUM:
             losses = torch.stack([lm_loss.sum() + q_halt_loss.sum()])
 
-        case AggregationStrategy.STACK_AND_SUM:
+        case AggregationStrategy.STACK_INTERNAL_AND_SUM:
             losses = torch.stack([lm_loss.sum() + q_halt_loss.sum() + intermediate_loss_weight * sum(internal_lm_losses)])
+
+        case AggregationStrategy.STACK_SUPERVISIONS:
+            assert isinstance(lm_loss, list), "lm_loss must be a list"
+            losses = torch.stack([l.sum() for l in lm_loss])
+
+        case AggregationStrategy.STACK_SUPERVISIONS_AND_IWRM:
+            assert isinstance(lm_loss, list), "lm_loss must be a list"
+            losses = torch.stack([l.sum(dim=1) for l in lm_loss]).flatten()
+
+        case AggregationStrategy.STACK_SUPERVISIONS_AND_SUM:
+            assert isinstance(lm_loss, list), "lm_loss must be a list"
+            losses = torch.stack([sum([l.sum() for l in lm_loss])])
+
+        case AggregationStrategy.STACK_SUPERVISIONS_AND_PIXELWISE:
+            assert isinstance(lm_loss, list), "lm_loss must be a list"
+            losses = torch.stack([l.sum(dim=0) for l in lm_loss]).flatten()
+
+        case AggregationStrategy.STACK_SUPERVISIONS_AND_IWRM_PIXELWISE:
+            assert isinstance(lm_loss, list), "lm_loss must be a list"
+            losses = torch.stack(lm_loss).flatten()
+
         case _:
             raise ValueError(f"Invalid aggregation strategy: {aggregation_strategy}")
 
