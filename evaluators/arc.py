@@ -299,6 +299,8 @@ class ARC:
         if save_path is not None:
             with open(os.path.join(save_path, "submission.json"), "w") as f:
                 json.dump(submission, f)
+            with open(os.path.join(save_path + '/../', "submission.json"), "w") as f:
+                json.dump(submission, f)
 
         # Final result
         all_results = {f"ARC/pass@{k}": correct[i] / len(self.test_puzzles) for i, k in enumerate(self.pass_Ks)}
