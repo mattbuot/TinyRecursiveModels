@@ -803,6 +803,9 @@ def launch(hydra_config: DictConfig):
             metrics, new_puzzle_id_counts = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
 
             if RANK == 0 and metrics is not None:
+                print_metrics = {k: f"{v:.2f}" for k, v in metrics.items() if k in ('train/lm_loss', 'train/exact_accuracy')}
+                progress_bar.set_postfix(print_metrics)
+
                 if not config.no_wandb:
                     wandb.log(metrics, step=train_state.step)
 
