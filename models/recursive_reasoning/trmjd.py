@@ -223,6 +223,13 @@ class TinyRecursiveReasoningModelJD_V1_Inner(nn.Module):
             output_logits=torch.where(reset_flag.contiguous().view(-1, 1, 1), self.output_logits_init, carry.output_logits),
         )
 
+    def perturb_carry(self, carry: TinyRecursiveReasoningModelJD_V1InnerCarry, perturbation_rate: float):
+        return TinyRecursiveReasoningModelJD_V1InnerCarry(
+            z_H=carry.z_H + torch.randn_like(carry.z_H) * perturbation_rate,
+            z_L=carry.z_L + torch.randn_like(carry.z_L) * perturbation_rate,
+            output_logits=carry.output_logits,
+        )
+
     def forward(self, carry: TinyRecursiveReasoningModelJD_V1InnerCarry, batch: dict[str, torch.Tensor]) -> tuple[TinyRecursiveReasoningModelJD_V1InnerCarry, list[torch.Tensor], tuple[torch.Tensor | None, torch.Tensor | None]]:
         seq_info = dict(
             cos_sin=self.rotary_emb() if hasattr(self, "rotary_emb") else None,

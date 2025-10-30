@@ -127,6 +127,7 @@ class PretrainConfig(pydantic.BaseModel):
     grad_n_groups: int | None = None
     differential_loss: bool = False
     intermediate_loss_weight: float = 0.0001
+    carry_perturbation_rate: float = 0.001
     
     # Dropout
     dropout: float = 0.1
@@ -134,6 +135,11 @@ class PretrainConfig(pydantic.BaseModel):
     # Wandb
     no_wandb: bool = False
     in_sweep: bool = False
+    start_step: int = 0
+
+    # Gradient accumulation
+    effective_batch_size: int = 512
+    grad_accum_steps: int | None = None
 
     # Custom sampling
     custom_sampling: bool = True
@@ -151,6 +157,7 @@ class TrainState:
 
     step: int
     total_steps: int
+    micro_step: int = 0
 
 
 def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, puzzle_weights: dict[int, float] | None = None, **kwargs):
@@ -275,14 +282,22 @@ def cosine_schedule_with_warmup_lr_lambda(
 
 
 def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, rank: int, world_size: int):
-    # Estimated total training steps
-    total_steps = int(config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples / config.global_batch_size)
+    # Determine accumulation steps
+    if config.grad_accum_steps is None:
+        assert config.effective_batch_size % config.global_batch_size == 0, "effective_batch_size must be divisible by global_batch_size"
+        config.grad_accum_steps = config.effective_batch_size // config.global_batch_size
+        if config.grad_accum_steps < 1:
+            config.grad_accum_steps = 1
+
+    # Estimated total optimizer steps (account for accumulation)
+    raw_steps = int(config.epochs * train_metadata.total_groups * train_metadata.mean_puzzle_examples / config.global_batch_size)
+    total_steps = raw_steps // config.grad_accum_steps
 
     # Model
     model, optimizers, optimizer_lrs = create_model(config, train_metadata, rank=rank, world_size=world_size)
 
     return TrainState(
-        step=0,
+        step=config.start_step,
         total_steps=total_steps,
 
         model=model,
@@ -394,10 +409,7 @@ def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetada
 def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int) -> tuple[dict[str, float] | None, dict[int, tuple[int, int]] | None]:
     global global_step
     
-    train_state.step += 1
-    global_step = train_state.step
-    if train_state.step > train_state.total_steps:  # At most train_total_steps
-        return
+    # Defer global step increment to optimizer step (after accumulation)
 
     # To device
     batch = {k: v.cuda() for k, v in batch.items()}
@@ -408,6 +420,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
 
+    metrics: dict[str, torch.Tensor] = {}
     if config.grad_aggregation.is_stack_supervisions():
         
         all_finish = False
@@ -422,6 +435,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             iteration_metrics[f"lm_loss_{iterations}"] = loss_list[0].sum().detach()
             lm_loss.append(loss_list[0] / config.arch.halt_max_steps)
             iterations += 1
+            train_state.carry.inner_carry = train_state.model.model.inner.perturb_carry(train_state.carry.inner_carry, config.carry_perturbation_rate)
             
             assert iterations <= config.arch.halt_max_steps, "Max iterations reached"
 
@@ -437,13 +451,23 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     
     losses = aggregate_losses(lm_loss, q_halt_loss, internal_lm_losses, config.grad_aggregation, n_groups=config.grad_n_groups, intermediate_loss_weight=config.intermediate_loss_weight)
 
+    # Gradient accumulation: scale by effective batch size (global_batch_size * accum_steps)
+    accum_steps = config.grad_accum_steps if config.grad_accum_steps is not None else 1
+    effective_divisor = global_batch_size * accum_steps
     if len(losses) == 1:
         loss = losses[0]
-        ((1 / global_batch_size) * loss).backward()
+        ((1 / effective_divisor) * loss).backward()
     else:
-        backward([(1 / global_batch_size) * loss for loss in losses], aggregator, parallel_chunk_size=1)
+        backward(tensors=[(1 / effective_divisor) * loss for loss in losses], aggregator=aggregator, parallel_chunk_size=1)
 
-    # Allreduce
+    # Update micro step and decide whether to step optimizer
+    train_state.micro_step += 1
+    do_step = (train_state.micro_step % accum_steps) == 0
+
+    if not do_step:
+        return None, None
+
+    # Allreduce once per optimizer step
     if world_size > 1:
         for param in train_state.model.parameters():
             if param.grad is not None:
@@ -466,6 +490,11 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
             
         optim.step()
         optim.zero_grad()
+
+    # Increment global/optimizer step counter at accumulation boundary
+    train_state.step += 1
+    global_step = train_state.step
+    train_state.micro_step = 0
 
     # Reduce metrics
     if len(metrics):
