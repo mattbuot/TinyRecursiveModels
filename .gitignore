@@ -6,6 +6,6 @@ checkpoints/
 
 outputs/
 
-wandb/
+/wandb/
 
 data/
