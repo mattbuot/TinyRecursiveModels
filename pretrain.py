@@ -158,6 +158,8 @@ class TrainState:
     step: int
     total_steps: int
     micro_step: int = 0
+    accumulated_metrics: dict[str, torch.Tensor] | None = None
+    accumulated_batch: dict[str, torch.Tensor] | None = None
 
 
 def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, puzzle_weights: dict[int, float] | None = None, **kwargs):
@@ -303,7 +305,9 @@ def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetada
         model=model,
         optimizers=optimizers,
         optimizer_lrs=optimizer_lrs,
-        carry=None
+        carry=None,
+        accumulated_metrics=None,
+        accumulated_batch=None
     )
 
 
@@ -460,12 +464,41 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     else:
         backward(tensors=[(1 / effective_divisor) * loss for loss in losses], aggregator=aggregator, parallel_chunk_size=1)
 
+    # Accumulate metrics across micro-batches
+    if train_state.accumulated_metrics is None:
+        train_state.accumulated_metrics = {k: v.clone().detach() for k, v in metrics.items()}
+        if config.custom_sampling and "puzzle_identifiers" in batch:
+            train_state.accumulated_batch = {"puzzle_identifiers": batch["puzzle_identifiers"].clone()}
+        else:
+            train_state.accumulated_batch = None
+    else:
+        for k, v in metrics.items():
+            if k in train_state.accumulated_metrics:
+                train_state.accumulated_metrics[k] = train_state.accumulated_metrics[k] + v.detach()
+            else:
+                train_state.accumulated_metrics[k] = v.clone().detach()
+        if config.custom_sampling and "puzzle_identifiers" in batch:
+            if train_state.accumulated_batch is not None:
+                train_state.accumulated_batch["puzzle_identifiers"] = torch.cat([
+                    train_state.accumulated_batch["puzzle_identifiers"], 
+                    batch["puzzle_identifiers"]
+                ])
+            else:
+                train_state.accumulated_batch = {"puzzle_identifiers": batch["puzzle_identifiers"].clone()}
+
     # Update micro step and decide whether to step optimizer
     train_state.micro_step += 1
     do_step = (train_state.micro_step % accum_steps) == 0
 
     if not do_step:
         return None, None
+    
+    # Use accumulated metrics for logging
+    metrics = train_state.accumulated_metrics
+    accumulated_batch_for_logging = train_state.accumulated_batch
+    # Reset accumulated metrics for next cycle
+    train_state.accumulated_metrics = None
+    train_state.accumulated_batch = None
 
     # Allreduce once per optimizer step
     if world_size > 1:
@@ -497,7 +530,7 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
     train_state.micro_step = 0
 
     # Reduce metrics
-    if len(metrics):
+    if metrics is not None and len(metrics):
         assert not any(v.requires_grad for v in metrics.values())
 
         metric_keys = [m for m in sorted(metrics.keys()) if not m.endswith("_flatten")]  # Sort keys to guarantee all processes use the same order.
@@ -516,14 +549,19 @@ def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, glo
                 metric_values_flatten = metric_values_flatten.cpu()
                 reduced_metrics_flatten = {k: metric_values_flatten[i] for i, k in enumerate(metric_keys_flatten)}
                 exact_accuracy = reduced_metrics_flatten["exact_accuracy_flatten"]
-                puzzle_ids = batch["puzzle_identifiers"].cpu()
-                puzzle_id_to_counts = compute_exact_accuracy_per_puzzle(puzzle_ids, exact_accuracy)
+                if accumulated_batch_for_logging is not None and "puzzle_identifiers" in accumulated_batch_for_logging:
+                    puzzle_ids = accumulated_batch_for_logging["puzzle_identifiers"].cpu()
+                    puzzle_id_to_counts = compute_exact_accuracy_per_puzzle(puzzle_ids, exact_accuracy)
+                else:
+                    puzzle_id_to_counts = None
             else:
                 puzzle_id_to_counts = None
 
             # Postprocess
+            # Normalize by effective batch size (accumulated across all micro-batches)
             count = max(reduced_metrics["count"], 1)  # Avoid NaNs
-            reduced_metrics = {f"train/{k}": v / (global_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
+            effective_batch_size = global_batch_size * accum_steps
+            reduced_metrics = {f"train/{k}": v / (effective_batch_size if k.endswith("loss") else count) for k, v in reduced_metrics.items()}
 
             reduced_metrics["train/lr"] = lr_this_step
             return reduced_metrics, puzzle_id_to_counts
